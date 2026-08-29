@@ -1,0 +1,140 @@
+:root {
+  --bg: #09090b;
+  --surface: #18181b;
+  --border: #27272a;
+  --text: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --accent: #3b82f6;
+  --success: #10b981;
+  --danger: #ef4444;
+}
+
+body, html {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+}
+
+.layout {
+  display: flex;
+  height: 100vh;
+}
+
+.pane {
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.left-pane {
+  width: 250px;
+  background: var(--bg);
+}
+
+.center-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.right-pane {
+  width: 350px;
+  background: var(--bg);
+}
+
+.header {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.tree-node {
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tree-node:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#editor-container {
+  flex: 1;
+  width: 100%;
+}
+
+.terminal-console {
+  height: 200px;
+  border-top: 1px solid var(--border);
+  background: #000;
+  color: #0f0;
+  font-family: monospace;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.chat-message {
+  margin-bottom: 15px;
+  padding: 10px;
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.mode-pill {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: var(--border);
+  margin-right: 5px;
+  cursor: pointer;
+}
+
+.mode-pill.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.input-area {
+  padding: 15px;
+  border-top: 1px solid var(--border);
+}
+
+input[type="text"] {
+  width: 100%;
+  padding: 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 5px;
+}
+
+button.danger {
+  background: var(--danger);
+}
+button.success {
+  background: var(--success);
+}

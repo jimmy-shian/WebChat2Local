@@ -1,0 +1,30 @@
+{
+  "name": "webchat2local-studio",
+  "displayName": "WebChat2Local Studio Shell",
+  "version": "1.0.0",
+  "publisher": "webchat2local",
+  "engines": {
+    "theia": "^1.40.0"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "webchat2local.start",
+        "title": "Start WebChat2Local Agent"
+      }
+    ],
+    "views": {
+      "ai-ide": [
+        {
+          "id": "webchat2local-chat",
+          "name": "WebChat2Local Chat"
+        }
+      ]
+    },
+    "agentModes": ["ASK", "PLAN", "CODE", "DEBUG", "AGENT"],
+    "endpoints": {
+      "chat": "@theia/ai-chat",
+      "ide": "@theia/ai-ide"
+    }
+  }
+}

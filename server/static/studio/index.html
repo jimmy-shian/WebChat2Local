@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebChat2Local Studio Shell</title>
+    <link rel="stylesheet" href="/static/studio/studio.css">
+</head>
+<body>
+    <div class="layout">
+        <!-- Left: Workspace File Navigator -->
+        <div class="pane left-pane">
+            <div class="header">Workspace</div>
+            <div class="content" id="file-tree"></div>
+        </div>
+
+        <!-- Center: Monaco Editor & Live Diff Viewer + Terminal -->
+        <div class="pane center-pane">
+            <div class="header">Editor <span id="current-file" style="margin-left: 10px; color: var(--text-muted);"></span></div>
+            <div id="editor-container">
+                <textarea id="editor" style="width:100%; height:100%; background:var(--bg); color:var(--text); border:none; padding:10px; font-family:monospace; resize:none;" spellcheck="false"></textarea>
+            </div>
+            <div class="terminal-console" id="terminal">
+                <div>PS C:\Workspace> _</div>
+            </div>
+        </div>
+
+        <!-- Right: AI Agent Chat Sidebar -->
+        <div class="pane right-pane">
+            <div class="header">
+                <div>AI Assistant</div>
+                <div style="margin-top:5px;">
+                    <span class="mode-pill active">ASK</span>
+                    <span class="mode-pill">PLAN</span>
+                    <span class="mode-pill">CODE</span>
+                    <span class="mode-pill">DEBUG</span>
+                    <span class="mode-pill">AGENT</span>
+                </div>
+            </div>
+            <div class="content" id="chat-messages">
+                <div class="chat-message">Agent: Hello! I'm ready to help.</div>
+            </div>
+            <div class="input-area">
+                <input type="text" id="chat-input" placeholder="Ask something (@file to attach context)..." onkeypress="if(event.key === 'Enter') sendMessage()">
+                <div style="display:flex; justify-content:space-between;">
+                    <button onclick="sendMessage()">Send</button>
+                    <label style="font-size:12px; margin-top:8px;"><input type="checkbox"> Auto-pilot</label>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="/static/studio/studio.js"></script>
+</body>
+</html>

@@ -4,7 +4,6 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-
 def adapt_response_for_tools(
     full_text: str,
     available_tool_names: List[str]
@@ -82,88 +81,42 @@ def adapt_response_for_tools(
     finish_reason = "tool_calls" if (tool_calls and len(tool_calls) > 0) else "stop"
     return final_content, (tool_calls if tool_calls else None), finish_reason
 
+def test_dual_adaptation():
+    tools = ["attempt_completion", "read_file", "write_to_file", "execute_command"]
 
-def extract_tools_from_text(text: str, available_tool_names: List[str]) -> Optional[List[Dict[str, Any]]]:
-    """Compatibility wrapper around adapt_response_for_tools."""
-    _, tool_calls, _ = adapt_response_for_tools(text, available_tool_names)
-    return tool_calls
+    # Case 1: Plain conversational answer without XML tags
+    text1 = "這是 Jimmy's Tools 的專案，index.html 是首頁。"
+    content1, tool_calls1, finish1 = adapt_response_for_tools(text1, tools)
+    print("--- Test 1 (Plain text fallback) ---")
+    print("Content:", repr(content1))
+    print("Tool Calls:", json.dumps(tool_calls1, indent=2, ensure_ascii=False))
+    print("Finish Reason:", finish1)
+    assert "<attempt_completion>" in content1
+    assert "<result>" in content1
+    assert finish1 == "tool_calls"
+    assert tool_calls1[0]["function"]["name"] == "attempt_completion"
 
+    # Case 2: Already has <attempt_completion><result>
+    text2 = "<attempt_completion><result>任務已完成，包含9個工具。</result></attempt_completion>"
+    content2, tool_calls2, finish2 = adapt_response_for_tools(text2, tools)
+    print("\n--- Test 2 (Explicit attempt_completion) ---")
+    print("Content:", repr(content2))
+    print("Tool Calls:", json.dumps(tool_calls2, indent=2, ensure_ascii=False))
+    print("Finish Reason:", finish2)
+    assert finish2 == "tool_calls"
+    assert tool_calls2[0]["function"]["name"] == "attempt_completion"
 
-def format_sse_chunk(
-    chunk_id: str,
-    model: str,
-    content_delta: Optional[str] = None,
-    role: Optional[str] = None,
-    finish_reason: Optional[str] = None,
-    tool_calls: Optional[List[Dict[str, Any]]] = None,
-) -> str:
-    """Formats an OpenAI-compatible SSE chunk string with optional tool_calls support."""
-    delta: Dict[str, Any] = {}
-    if role:
-        delta["role"] = role
-    if content_delta is not None:
-        delta["content"] = content_delta
-    if tool_calls:
-        indexed_calls = []
-        for i, call in enumerate(tool_calls):
-            indexed = dict(call)
-            indexed["index"] = i
-            indexed_calls.append(indexed)
-        delta["tool_calls"] = indexed_calls
+    # Case 3: Action tool (read_file)
+    text3 = "<read_file><path>index.html</path></read_file>"
+    content3, tool_calls3, finish3 = adapt_response_for_tools(text3, tools)
+    print("\n--- Test 3 (read_file action tool) ---")
+    print("Content:", repr(content3))
+    print("Tool Calls:", json.dumps(tool_calls3, indent=2, ensure_ascii=False))
+    print("Finish Reason:", finish3)
+    assert finish3 == "tool_calls"
+    assert tool_calls3[0]["function"]["name"] == "read_file"
 
-    payload = {
-        "id": chunk_id,
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "delta": delta,
-                "finish_reason": finish_reason,
-            }
-        ],
-    }
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    print("\nAll Dual-Adaptation Tests Passed!")
 
-
-def format_sse_done() -> str:
-    """Formats the OpenAI-compatible stream terminator."""
-    return "data: [DONE]\n\n"
-
-
-def format_non_stream_response(
-    response_id: str,
-    model: str,
-    content: str,
-    finish_reason: str = "stop",
-    tool_calls: Optional[List[Dict[str, Any]]] = None,
-) -> dict:
-    """Formats an OpenAI-compatible non-streaming response dictionary."""
-    message: Dict[str, Any] = {
-        "role": "assistant",
-    }
-    if content:
-        message["content"] = content
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-        finish_reason = "tool_calls"
-
-    return {
-        "id": response_id,
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": model,
-        "choices": [
-            {
-                "index": 0,
-                "message": message,
-                "finish_reason": finish_reason,
-            }
-        ],
-        "usage": {
-            "prompt_tokens": len(content) // 4,
-            "completion_tokens": len(content) // 4,
-            "total_tokens": len(content) // 2,
-        },
-    }
+if __name__ == "__main__":
+    test_dual_adaptation()

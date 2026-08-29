@@ -1,0 +1,16 @@
+{
+  "id": "webchat2local-mcp",
+  "name": "WebChat2Local MCP Connector",
+  "version": "1.0.0",
+  "type": "mcp-connector",
+  "server": {
+    "command": "python",
+    "args": ["-m", "server.mcp.mcp_server"],
+    "transport": {
+      "type": "stdio"
+    },
+    "http": {
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}

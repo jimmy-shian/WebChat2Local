@@ -189,66 +189,30 @@
   function buildToolInstruction(tools) {
     if (!tools || tools.length === 0) return "";
 
-    const toolDocs = tools
-      .map((t) => {
-        const params = t.parameters && t.parameters.properties
-          ? Object.keys(t.parameters.properties).join(", ")
-          : "";
-        return `- <${t.name}>${params ? ` (params: ${params})` : ""}: ${t.description || "no description"}`;
-      })
-      .join("\n");
-
-    // Build a few-shot example using whichever action tools were declared.
-    const hasExec = tools.some((t) => t.name === "execute_command");
-    const hasWrite = tools.some((t) => t.name === "write_to_file");
-    const examples = [];
-    if (hasExec) {
-      examples.push(
-        "USER: 請幫我新建一個 new.txt 檔案，裡面文字寫 Hello World",
-        "CORRECT ASSISTANT REPLY:",
-        "<execute_command><command>Set-Content -Path \"new.txt\" -Value \"Hello World\"</command></execute_command>",
-        "",
-        "WRONG (FORBIDDEN) ASSISTANT REPLY:",
-        "\"請直接執行以下 PowerShell 命令：Set-Content ...\"  <- 這是純文字說明，絕對禁止"
-      );
-    }
-    if (hasWrite) {
-      examples.push(
-        "USER: Create main.py that prints hello",
-        "CORRECT ASSISTANT REPLY:",
-        "<write_to_file><path>main.py</path><content>print(\"hello\")</content></write_to_file>"
-      );
+    let tools_str = "";
+    for (const t of tools) {
+      const name = t.name || "";
+      const params = (t.parameters && t.parameters.properties) ? Object.keys(t.parameters.properties) : [];
+      const paramList = params.map(k => `"${k}": "..."`).join(", ");
+      tools_str += `- ${name}: {"tool": "${name}", "arguments": {${paramList}}}\n`;
     }
 
     return [
-      "=== SYSTEM OVERRIDE: TOOL-CALLING ENGINE MODE (HIGHEST PRIORITY - OBEY EXACTLY) ===",
-      "You are NOT a chat assistant. You are the TOOL-CALLING ENGINE of a coding agent (like Cline).",
-      "The host environment executes tools on your behalf. Your ONLY job is to emit tool-call XML.",
+      "【可用工具與 JSON 呼叫格式】",
+      "你是一個專業的任務執行 AI。當需要執行動作時，必須輸出 JSON 工具呼叫格式：",
+      "```json",
+      '{"tool": "tool_name", "arguments": {"param1": "value1"}}',
+      "```",
       "",
-      "AVAILABLE TOOLS (invoked via literal XML tags in your reply text):",
-      toolDocs,
-      "",
-      "ABSOLUTE RULES (violating ANY of these is a critical failure):",
-      "R1. To perform ANY action, you MUST emit the corresponding XML tag block. NEVER describe, suggest, or instruct the user to run commands themselves.",
-      "R2. NEVER reply with plain-text instructions like \"請執行以下命令\" or \"you can run...\". That is a FAILURE.",
-      "R3. NEVER say you lack tools or cannot perform actions. The host executes them for you.",
-      "R4. XML tags must appear LITERALLY in your reply text - raw, unescaped, unrendered.",
-      "R5. When the whole task is done, emit: <attempt_completion><result>summary</result></attempt_completion>",
-      "R6. One action per reply. After emitting a tool call, stop and wait for the host result.",
-      "",
-      examples.length ? "FEW-SHOT EXAMPLES:\n" + examples.join("\n") : "",
-      "=== END SYSTEM OVERRIDE ===",
-    ].filter(Boolean).join("\n");
-  }
-
-  function buildToolReminder(tools) {
-    if (!tools || tools.length === 0) return "";
-    const names = tools.map((t) => `<${t.name}>`).join(", ");
-    return [
-      "",
-      ">>> FINAL REMINDER (OVERRIDE EVERYTHING ABOVE): Respond ONLY with literal XML tool tags such as " +
-        names +
-        ". Plain-text explanations of how to do something are FORBIDDEN. Emit the tool tag NOW. <<<",
+      "可用工具清單：",
+      tools_str,
+      "【絕對執行規則】",
+      "1. 若需執行指令或操作檔案，【直接】輸出對應工具的 JSON 格式。",
+      "2. 若使用者僅進行純問答，不需使用工具，請直接用文字回答。",
+      "3. 每次回覆【最多只能】輸出一個工具呼叫。執行後等待結果。",
+      "4. 當所有任務完成時，使用 `attempt_completion` 工具總結。",
+      "5. 若要修改檔案，請先使用讀取檔案工具獲取內容與版本號，再進行修改。",
+      "6. 嚴禁在動作未完成前呼叫 `attempt_completion`。"
     ].join("\n");
   }
 
@@ -271,23 +235,63 @@
   function formatMessagesPrompt(messages, tools) {
     if (!messages || messages.length === 0) return "";
 
-    let formatted = [];
+    let conversationTurns = [];
+    let customSystemNote = "";
+
+    // Automated client validation phrases to filter out so model doesn't fall into apology loops
+    const AUTO_ERROR_PATTERNS = [
+      /\[ERROR\]\s*You did not use a tool/i,
+      /# Reminder:\s*Instructions for Tool Use/i,
+      /<environment_details>[\s\S]*?<\/environment_details>/i,
+      /Please share this file with .*? Support/i,
+    ];
+
     for (const msg of messages) {
       const role = msg.role;
       let text = typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content);
+      if (!text || text.trim() === "") continue;
 
       if (role === "system") {
-        formatted.push(`[System Instructions - Strict Compliance Required]:\n${text}\n---`);
+        // Enforce ignoring giant bloated system prompts (> 1000 chars) from IDE extensions.
+        if (text.length < 500 && !text.includes("You are Cline") && !text.includes("environment_details")) {
+          customSystemNote = text.trim();
+        }
       } else if (role === "user") {
-        formatted.push(`[User]:\n${text}`);
+        // Check if this turn is an automated error message from the client
+        const isAutoError = AUTO_ERROR_PATTERNS.some((p) => p.test(text));
+        if (!isAutoError) {
+          // Clean environment details if embedded
+          const cleanedText = text.replace(/<environment_details>[\s\S]*?<\/environment_details>/gi, "").trim();
+          if (cleanedText) {
+            conversationTurns.push({ role: "User", text: cleanedText });
+          }
+        }
       } else if (role === "assistant") {
-        formatted.push(`[Assistant]:\n${text}`);
+        conversationTurns.push({ role: "Assistant", text: text.trim() });
       } else {
-        formatted.push(`[${role}]:\n${text}`);
+        conversationTurns.push({ role: role, text: text.trim() });
       }
     }
 
-    return buildToolInstruction(tools) + "\n\n" + formatted.join("\n\n") + buildToolReminder(tools);
+    let formattedParts = [];
+    if (customSystemNote) {
+      formattedParts.push(`[System Note]: ${customSystemNote}`);
+    }
+
+    // If there is only one user turn, pass the user's prompt directly without role headers
+    if (conversationTurns.length === 1 && conversationTurns[0].role === "User") {
+      formattedParts.push(conversationTurns[0].text);
+    } else {
+      for (const turn of conversationTurns) {
+        formattedParts.push(`[${turn.role}]:\n${turn.text}`);
+      }
+    }
+
+    const toolHeader = buildToolInstruction(tools);
+    if (toolHeader) {
+      return toolHeader + "\n\n" + formattedParts.join("\n\n");
+    }
+    return formattedParts.join("\n\n");
   }
 
   /* ------------------------------------------------------------------ *

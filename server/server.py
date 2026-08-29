@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +22,7 @@ from .stream_adapter import (
     format_sse_chunk,
     format_sse_done,
 )
+from server.providers.provider_adapter import parse_tool_response
 
 # Custom log buffer to display clean server events inside Web Dashboard
 class LogBufferHandler(logging.Handler):
@@ -105,12 +106,12 @@ AVAILABLE_MODELS = [
 
 
 class ExtensionManager:
-    """Manages WebSocket connections to the browser extension and routes request queues."""
+    """Manages WebSocket connections to multiple browser extension tabs (ChatGPT, Gemini) and routes request queues by model."""
 
     def __init__(self):
-        self.active_socket: Optional[WebSocket] = None
-        self.connections: List[WebSocket] = []
-        self.client_info: Dict[str, Any] = {}
+        # Map provider name ("ChatGPT", "Gemini") to connection details
+        self.providers: Dict[str, Dict[str, Any]] = {}
+        self.socket_to_provider: Dict[WebSocket, str] = {}
         self.pending_requests: Dict[str, asyncio.Queue] = {}
         self.stats = {
             "total_requests": 0,
@@ -121,63 +122,152 @@ class ExtensionManager:
 
     @property
     def is_connected(self) -> bool:
-        return self.active_socket is not None
+        return len(self.providers) > 0
+
+    @property
+    def active_providers(self) -> List[str]:
+        return list(self.providers.keys())
+
+    @property
+    def client_info(self) -> Dict[str, Any]:
+        """Returns primary or combined client info for backwards compatibility."""
+        if not self.providers:
+            return {}
+        # Return first active provider's info
+        first_key = list(self.providers.keys())[0]
+        return self.providers[first_key].get("info", {})
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
-        self.connections.append(websocket)
-        self.active_socket = websocket
         self.stats["connected_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"Browser extension connected via WebSocket. ({len(self.connections)} live)")
+
+    def register_provider(self, websocket: WebSocket, info: dict):
+        raw_name = str(info.get("provider", "ChatGPT")).lower()
+        if "gemini" in raw_name:
+            provider_name = "Gemini"
+        elif "deepseek" in raw_name:
+            provider_name = "DeepSeek"
+        else:
+            provider_name = "ChatGPT"
+
+        self.providers[provider_name] = {
+            "websocket": websocket,
+            "info": info,
+            "connected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "busy": False,
+            "last_seen": time.time(),
+        }
+        self.socket_to_provider[websocket] = provider_name
+        logger.info(f"Registered Provider '{provider_name}' via WebSocket. Active: {list(self.providers.keys())} (Info: {info})")
 
     def disconnect(self, websocket: Optional[WebSocket] = None):
-        """Remove a specific socket; fall back to another live connection if present."""
-        if websocket is not None:
-            self.connections = [c for c in self.connections if c is not websocket]
-        else:
-            self.connections = []
-        if websocket is None or self.active_socket is websocket:
-            self.active_socket = self.connections[-1] if self.connections else None
-            self.client_info = {}
-            if not self.active_socket:
-                logger.warning("Browser extension disconnected.")
+        """Removes a specific socket without disconnecting other live providers."""
+        if websocket is None:
+            self.providers.clear()
+            self.socket_to_provider.clear()
+            logger.warning("All browser extensions disconnected.")
+            return
 
-    async def dispatch_job(self, job_data: dict) -> asyncio.Queue:
-        if not self.is_connected:
+        provider_name = self.socket_to_provider.pop(websocket, None)
+        if provider_name and provider_name in self.providers:
+            if self.providers[provider_name].get("websocket") == websocket:
+                del self.providers[provider_name]
+                logger.warning(f"Provider '{provider_name}' disconnected. Remaining active: {list(self.providers.keys())}")
+        else:
+            for name, p in list(self.providers.items()):
+                if p.get("websocket") == websocket:
+                    del self.providers[name]
+                    logger.warning(f"Provider '{name}' disconnected.")
+
+    def get_provider_for_model(self, model: str) -> Tuple[str, WebSocket]:
+        """Intelligently selects the appropriate provider WebSocket based on model name, with automatic fallback."""
+        if not self.providers:
             raise HTTPException(
                 status_code=503,
                 detail=(
-                    "No active ChatGPT Web session connected. Please open https://chatgpt.com in "
-                    "Chrome/Edge with the WebChat2Local extension loaded."
+                    "WebChat2Local Bridge: No active AI Web browser tabs connected.\n"
+                    "1. Open Chrome/Edge.\n"
+                    "2. Navigate to https://chatgpt.com (ChatGPT), https://gemini.google.com/app (Gemini), or https://chat.deepseek.com (DeepSeek).\n"
+                    "3. Ensure WebChat2Local extension is loaded and active."
                 ),
             )
+
+        model_lower = (model or "").lower()
+
+        # 1. Direct Gemini Routing
+        if "gemini" in model_lower:
+            if "Gemini" in self.providers:
+                return "Gemini", self.providers["Gemini"]["websocket"]
+            # Fallback if Gemini not connected but others are
+            fallback = list(self.providers.keys())[0]
+            logger.info(f"Model '{model}' requested Gemini, but Gemini tab not connected. Auto-fallback to [{fallback}].")
+            return fallback, self.providers[fallback]["websocket"]
+
+        # 2. Direct DeepSeek Routing
+        if "deepseek" in model_lower:
+            if "DeepSeek" in self.providers:
+                return "DeepSeek", self.providers["DeepSeek"]["websocket"]
+            # Fallback if DeepSeek not connected but others are
+            fallback = list(self.providers.keys())[0]
+            logger.info(f"Model '{model}' requested DeepSeek, but DeepSeek tab not connected. Auto-fallback to [{fallback}].")
+            return fallback, self.providers[fallback]["websocket"]
+
+        # 3. Direct ChatGPT Routing
+        if any(prefix in model_lower for prefix in ["gpt", "chatgpt", "o1", "o3", "text-", "davinci"]):
+            if "ChatGPT" in self.providers:
+                return "ChatGPT", self.providers["ChatGPT"]["websocket"]
+            # Fallback if ChatGPT not connected but others are
+            fallback = list(self.providers.keys())[0]
+            logger.info(f"Model '{model}' requested ChatGPT, but ChatGPT tab not connected. Auto-fallback to [{fallback}].")
+            return fallback, self.providers[fallback]["websocket"]
+
+        # 4. 'auto' or generic model: prefer idle provider, or first available
+        if "ChatGPT" in self.providers and not self.providers["ChatGPT"].get("busy", False):
+            return "ChatGPT", self.providers["ChatGPT"]["websocket"]
+        if "Gemini" in self.providers and not self.providers["Gemini"].get("busy", False):
+            return "Gemini", self.providers["Gemini"]["websocket"]
+        if "DeepSeek" in self.providers and not self.providers["DeepSeek"].get("busy", False):
+            return "DeepSeek", self.providers["DeepSeek"]["websocket"]
+
+        # Default fallback to first connected provider
+        first_provider = list(self.providers.keys())[0]
+        return first_provider, self.providers[first_provider]["websocket"]
+
+    async def dispatch_job(self, job_data: dict) -> asyncio.Queue:
+        model = job_data.get("model", "auto")
+        provider_name, target_socket = self.get_provider_for_model(model)
 
         req_id = job_data["request_id"]
         queue: asyncio.Queue = asyncio.Queue()
         self.pending_requests[req_id] = queue
         self.stats["total_requests"] += 1
 
+        if provider_name in self.providers:
+            self.providers[provider_name]["busy"] = True
+
         try:
-            await self.active_socket.send_text(json.dumps(job_data))
-            logger.info(f"Dispatched job {req_id} (model: {job_data.get('model')}) to browser.")
+            await target_socket.send_text(json.dumps(job_data))
+            logger.info(f"Dispatched job {req_id} (model: {model}) -> [{provider_name}]")
         except Exception as e:
             self.pending_requests.pop(req_id, None)
+            if provider_name in self.providers:
+                self.providers[provider_name]["busy"] = False
             self.stats["failed_requests"] += 1
-            logger.error(f"Failed to send job {req_id} to browser: {e}")
+            logger.error(f"Failed to send job {req_id} to [{provider_name}]: {e}")
             raise HTTPException(
                 status_code=502,
-                detail=f"Failed to communicate with browser extension: {str(e)}",
+                detail=f"Failed to communicate with [{provider_name}] browser extension: {str(e)}",
             )
 
         return queue
 
-    def handle_message(self, data: dict):
+    def handle_message(self, websocket: WebSocket, data: dict):
         msg_type = data.get("type")
         req_id = data.get("request_id")
 
         if msg_type == "ready":
-            self.client_info = data.get("info", {})
-            logger.info(f"Browser extension ready. Info: {self.client_info}")
+            info = data.get("info", {})
+            self.register_provider(websocket, info)
             return
 
         if msg_type == "pong":
@@ -186,6 +276,12 @@ class ExtensionManager:
         if not req_id or req_id not in self.pending_requests:
             logger.debug(f"Received message for unknown or finished request: {req_id}")
             return
+
+        # Mark provider as idle when done or errored
+        if msg_type in ["done", "error"]:
+            provider_name = self.socket_to_provider.get(websocket)
+            if provider_name and provider_name in self.providers:
+                self.providers[provider_name]["busy"] = False
 
         queue = self.pending_requests[req_id]
         queue.put_nowait(data)
@@ -292,17 +388,13 @@ async def chat_completions(req: ChatCompletionRequest, raw_request: Request):
 
                     elif p_type == "done":
                         full_text = packet.get("full_text", "") or "".join(full_content)
-                        if not full_content and full_text:
-                            full_content.append(full_text)
-                            yield format_sse_chunk(req_id, model_name, content_delta=full_text)
-
-                        finish_reason = packet.get("finish_reason", "stop")
-                        
-                        # Tool calling adaptation for Cline / Roo Code
                         if available_tool_names:
-                            tool_calls = extract_tools_from_text(full_text, available_tool_names)
+                            adapted_text, tool_calls, finish_reason = parse_tool_response(full_text, available_tool_names)
+                            if not full_content and adapted_text:
+                                full_content.append(adapted_text)
+                                yield format_sse_chunk(req_id, model_name, content_delta=adapted_text)
+
                             if tool_calls:
-                                finish_reason = "tool_calls"
                                 yield format_sse_chunk(
                                     req_id,
                                     model_name,
@@ -312,6 +404,10 @@ async def chat_completions(req: ChatCompletionRequest, raw_request: Request):
                             else:
                                 yield format_sse_chunk(req_id, model_name, finish_reason=finish_reason)
                         else:
+                            if not full_content and full_text:
+                                full_content.append(full_text)
+                                yield format_sse_chunk(req_id, model_name, content_delta=full_text)
+                            finish_reason = packet.get("finish_reason", "stop")
                             yield format_sse_chunk(req_id, model_name, finish_reason=finish_reason)
 
                         yield format_sse_done()
@@ -366,13 +462,11 @@ async def chat_completions(req: ChatCompletionRequest, raw_request: Request):
                 elif p_type == "done":
                     manager.stats["successful_requests"] += 1
                     final_text = packet.get("full_text") or "".join(accumulated_text)
-                    finish_reason = packet.get("finish_reason", "stop")
                     tool_calls = None
+                    finish_reason = packet.get("finish_reason", "stop")
 
                     if available_tool_names:
-                        tool_calls = extract_tools_from_text(final_text, available_tool_names)
-                        if tool_calls:
-                            finish_reason = "tool_calls"
+                        final_text, tool_calls, finish_reason = parse_tool_response(final_text, available_tool_names)
 
                     res_dict = format_non_stream_response(
                         req_id,
@@ -412,7 +506,7 @@ async def websocket_endpoint(websocket: WebSocket):
             raw_data = await websocket.receive_text()
             try:
                 data = json.loads(raw_data)
-                manager.handle_message(data)
+                manager.handle_message(websocket, data)
             except json.JSONDecodeError:
                 logger.warning(f"Invalid JSON received on WS: {raw_data[:100]}")
     except WebSocketDisconnect:
@@ -429,7 +523,15 @@ async def health_check():
     return {
         "status": "ok",
         "browser_connected": manager.is_connected,
-        "client_info": manager.client_info,
+        "active_providers": manager.active_providers,
+        "providers": {
+            name: {
+                "info": p.get("info", {}),
+                "connected_at": p.get("connected_at"),
+                "busy": p.get("busy", False),
+            }
+            for name, p in manager.providers.items()
+        },
         "stats": manager.stats,
     }
 
@@ -440,844 +542,108 @@ async def get_logs():
     return list(log_buffer.buffer)
 
 
+
+from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
+import os
+from server.tools.edit_engine import list_directory, read_file
+from fastapi.responses import FileResponse
+
+# We will serve static files from server/static
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+class SessionCreate(BaseModel):
+    mode: str = "ASK"
+
+class EditProposalRequest(BaseModel):
+    path: str
+    content: str
+    
+# Store sessions and proposals in memory
+SESSIONS = {}
+PROPOSALS = {}
+
+@app.get("/api/providers")
+async def get_providers():
+    return {
+        "providers": [
+            {
+                "name": name,
+                "active": True,
+                "info": p.get("info", {}),
+                "busy": p.get("busy", False),
+            }
+            for name, p in manager.providers.items()
+        ] or [{"name": "No providers connected", "active": False}]
+    }
+
+@app.get("/api/providers/{provider_name}/health")
+async def get_provider_health(provider_name: str):
+    if provider_name in manager.providers:
+        return {"status": "ok", "provider": provider_name, "active": True}
+    return {"status": "offline", "provider": provider_name, "active": False}
+
+@app.post("/api/sessions")
+async def create_session(session: SessionCreate):
+    import uuid
+    session_id = str(uuid.uuid4())
+    SESSIONS[session_id] = {"mode": session.mode}
+    return {"session_id": session_id, "mode": session.mode}
+
+@app.post("/api/sessions/{session_id}/cancel")
+async def cancel_session(session_id: str):
+    if session_id in SESSIONS:
+        del SESSIONS[session_id]
+        return {"status": "cancelled"}
+    raise HTTPException(status_code=404, detail="Session not found")
+
+@app.post("/api/proposals/{proposal_id}/accept")
+async def accept_proposal_endpoint(proposal_id: str):
+    if proposal_id in PROPOSALS:
+        prop = PROPOSALS[proposal_id]
+        prop["status"] = "accepted"
+        # If proposal has base_revision and new_content, apply it safely
+        if "base_revision" in prop and "new_content" in prop:
+            workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+            from server.tools.edit_engine import apply_proposal
+            res = apply_proposal(workspace, prop)
+            return res
+        return {"status": "accepted", "proposal_id": proposal_id}
+    raise HTTPException(status_code=404, detail="Proposal not found")
+
+@app.post("/api/proposals/{proposal_id}/reject")
+async def reject_proposal_endpoint(proposal_id: str):
+    if proposal_id in PROPOSALS:
+        PROPOSALS[proposal_id]["status"] = "rejected"
+        return {"status": "rejected", "proposal_id": proposal_id}
+    raise HTTPException(status_code=404, detail="Proposal not found")
+
+@app.get("/api/workspace/tree")
+async def get_workspace_tree():
+    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    return list_directory(workspace, ".")
+
+@app.get("/api/workspace/file")
+async def get_workspace_file(path: str):
+    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    return read_file(workspace, path)
+
+@app.post("/api/workspace/edit")
+async def edit_workspace_file(req: EditProposalRequest):
+    import uuid
+    proposal_id = str(uuid.uuid4())
+    PROPOSALS[proposal_id] = {"path": req.path, "content": req.content, "status": "pending"}
+    return {"proposal_id": proposal_id}
+
+@app.get("/studio")
+async def serve_studio():
+    static_dir = os.path.join(os.path.dirname(__file__), "static", "studio")
+    return FileResponse(os.path.join(static_dir, "index.html"))
+
 @app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    """Compact single-page OpenDesign dashboard with live terminal logs."""
-    return """
-    <!DOCTYPE html>
-    <html lang="zh-TW" class="dark">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>WebChat2Local Gateway</title>
-        <style>
-            :root {
-                --bg: #09090b;
-                --surface: #121215;
-                --surface-subtle: #18181b;
-                --border: #27272a;
-                --border-subtle: #1f1f23;
-                --text-primary: #f4f4f5;
-                --text-secondary: #a1a1aa;
-                --text-muted: #71717a;
-                --accent: #3b82f6;
-                --accent-dim: rgba(59, 130, 246, 0.1);
-                --success: #10b981;
-                --success-dim: rgba(16, 185, 129, 0.12);
-                --danger: #ef4444;
-                --code-bg: #000000;
-                --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, "Noto Sans TC", sans-serif;
-                --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            }
-
-            * { box-sizing: border-box; margin: 0; padding: 0; }
-            body {
-                background-color: var(--bg);
-                color: var(--text-primary);
-                font-family: var(--font-sans);
-                font-size: 13px;
-                line-height: 1.45;
-                height: 100vh;
-                overflow: hidden;
-                display: flex;
-                flex-direction: column;
-                padding: 16px 24px;
-                -webkit-font-smoothing: antialiased;
-            }
-
-            .container {
-                width: 100%;
-                max-width: 1280px;
-                margin: 0 auto;
-                height: 100%;
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-            }
-
-            .header {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                border-bottom: 1px solid var(--border);
-                padding-bottom: 10px;
-                flex-shrink: 0;
-            }
-
-            .header-title-group {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }
-
-            .title {
-                font-size: 16px;
-                font-weight: 600;
-                color: var(--text-primary);
-                letter-spacing: -0.02em;
-            }
-
-            .version-tag {
-                font-family: var(--font-mono);
-                font-size: 10.5px;
-                background: var(--surface-subtle);
-                color: var(--text-muted);
-                padding: 2px 6px;
-                border-radius: 4px;
-                border: 1px solid var(--border);
-            }
-
-            .header-links a {
-                color: var(--text-secondary);
-                text-decoration: none;
-                font-size: 12.5px;
-                transition: color 0.15s;
-            }
-            .header-links a:hover {
-                color: var(--text-primary);
-            }
-
-            /* Single Page Grid Layout */
-            .main-layout {
-                display: grid;
-                grid-template-columns: 1fr 1.25fr;
-                gap: 12px;
-                flex: 1;
-                min-height: 0; /* Important for inner scrolling */
-            }
-
-            .left-column {
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                overflow-y: auto;
-                padding-right: 4px;
-            }
-
-            .right-column {
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                overflow-y: auto;
-                padding-right: 4px;
-            }
-
-            .card {
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 6px;
-                padding: 14px;
-            }
-
-            .section-label {
-                font-size: 10.5px;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                color: var(--text-muted);
-                font-weight: 600;
-                margin-bottom: 8px;
-            }
-
-            /* Status Row */
-            .status-banner {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                padding: 8px 10px;
-                border-radius: 4px;
-                background: var(--surface-subtle);
-                border: 1px solid var(--border-subtle);
-                margin-bottom: 8px;
-            }
-
-            .status-indicator {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                font-size: 12px;
-                font-weight: 500;
-            }
-
-            .status-dot {
-                width: 6px;
-                height: 6px;
-                border-radius: 50%;
-                background: var(--text-muted);
-            }
-
-            .status-dot.active {
-                background: var(--success);
-                box-shadow: 0 0 6px var(--success);
-            }
-
-            .status-dot.inactive {
-                background: var(--danger);
-            }
-
-            .session-meta-grid {
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 6px;
-                font-size: 11.5px;
-            }
-
-            .meta-item {
-                background: var(--bg);
-                border: 1px solid var(--border-subtle);
-                padding: 6px 8px;
-                border-radius: 4px;
-            }
-
-            .meta-label {
-                font-size: 10px;
-                color: var(--text-muted);
-                margin-bottom: 2px;
-            }
-
-            .meta-value {
-                color: var(--text-primary);
-                font-family: var(--font-mono);
-                font-size: 11.5px;
-                word-break: break-all;
-            }
-
-            /* Metrics */
-            .stats-grid {
-                display: grid;
-                grid-template-columns: repeat(3, 1fr);
-                gap: 6px;
-            }
-
-            .stat-box {
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 6px;
-                padding: 10px;
-            }
-
-            .stat-title {
-                font-size: 10px;
-                color: var(--text-muted);
-                text-transform: uppercase;
-                letter-spacing: 0.04em;
-                margin-bottom: 2px;
-            }
-
-            .stat-number {
-                font-family: var(--font-mono);
-                font-size: 18px;
-                font-weight: 600;
-                color: var(--text-primary);
-            }
-
-            /* 1-Click Interactive Copy Cards */
-            .config-list {
-                display: flex;
-                flex-direction: column;
-                gap: 6px;
-            }
-
-            .config-item {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                background: var(--surface-subtle);
-                border: 1px solid var(--border-subtle);
-                border-radius: 4px;
-                padding: 8px 10px;
-                cursor: pointer;
-                user-select: none;
-                transition: all 0.15s ease;
-            }
-
-            .config-item:hover {
-                border-color: var(--border);
-                background: #1c1c20;
-            }
-
-            .config-item.copied {
-                border-color: var(--success);
-                background: rgba(16, 185, 129, 0.08);
-            }
-
-            .config-label-group {
-                display: flex;
-                flex-direction: column;
-                gap: 1px;
-            }
-
-            .config-key {
-                font-size: 10px;
-                color: var(--text-muted);
-                text-transform: uppercase;
-                letter-spacing: 0.03em;
-            }
-
-            .config-val {
-                font-family: var(--font-mono);
-                font-size: 12px;
-                color: var(--text-primary);
-                font-weight: 500;
-            }
-
-            .copy-hint {
-                font-size: 10.5px;
-                font-family: var(--font-mono);
-                color: var(--text-muted);
-                background: var(--bg);
-                border: 1px solid var(--border-subtle);
-                padding: 2px 6px;
-                border-radius: 4px;
-                transition: all 0.15s;
-                white-space: nowrap;
-            }
-
-            .config-item:hover .copy-hint {
-                color: var(--text-secondary);
-                border-color: var(--border);
-            }
-
-            .config-item.copied .copy-hint {
-                background: var(--success);
-                color: #ffffff;
-                border-color: var(--success);
-            }
-
-            /* Model Chips Dynamic Section */
-            .model-section {
-                background: var(--surface-subtle);
-                border: 1px solid var(--border-subtle);
-                border-radius: 4px;
-                padding: 8px 10px;
-                display: flex;
-                flex-direction: column;
-                gap: 6px;
-            }
-
-            .model-chips-grid {
-                display: flex;
-                flex-wrap: wrap;
-                gap: 5px;
-            }
-
-            .model-chip {
-                background: var(--bg);
-                border: 1px solid var(--border);
-                color: var(--text-primary);
-                padding: 4px 8px;
-                border-radius: 4px;
-                font-family: var(--font-mono);
-                font-size: 11px;
-                cursor: pointer;
-                transition: all 0.15s ease;
-                display: inline-flex;
-                align-items: center;
-                gap: 4px;
-                user-select: none;
-            }
-
-            .model-chip:hover {
-                border-color: var(--text-secondary);
-                background: var(--surface);
-            }
-
-            .model-chip.copied {
-                border-color: var(--success);
-                background: rgba(16, 185, 129, 0.12);
-                color: var(--success);
-            }
-
-            /* Terminal Console Live Logs */
-            .terminal-container {
-                display: flex;
-                flex-direction: column;
-                flex: 1;
-                min-height: 240px;
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 6px;
-                overflow: hidden;
-            }
-
-            .terminal-header {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                background: var(--surface-subtle);
-                padding: 6px 10px;
-                border-bottom: 1px solid var(--border);
-                font-size: 11px;
-            }
-
-            .terminal-title {
-                display: flex;
-                align-items: center;
-                gap: 6px;
-                font-weight: 600;
-                color: var(--text-secondary);
-            }
-
-            .terminal-tools {
-                display: flex;
-                align-items: center;
-                gap: 6px;
-            }
-
-            .btn-action {
-                background: var(--bg);
-                border: 1px solid var(--border);
-                color: var(--text-secondary);
-                padding: 2px 8px;
-                font-size: 10.5px;
-                border-radius: 4px;
-                cursor: pointer;
-                transition: all 0.15s;
-                font-family: var(--font-sans);
-            }
-
-            .btn-action:hover {
-                color: var(--text-primary);
-                border-color: var(--text-secondary);
-            }
-
-            .terminal-body {
-                flex: 1;
-                background: var(--code-bg);
-                padding: 8px 10px;
-                font-family: var(--font-mono);
-                font-size: 11px;
-                color: #e4e4e7;
-                overflow-y: auto;
-                line-height: 1.4;
-                display: flex;
-                flex-direction: column;
-                gap: 2px;
-            }
-
-            .log-line {
-                display: flex;
-                gap: 8px;
-                word-break: break-all;
-            }
-
-            .log-time {
-                color: var(--text-muted);
-                flex-shrink: 0;
-            }
-
-            .log-level {
-                font-weight: 600;
-                flex-shrink: 0;
-            }
-
-            .log-level.INFO { color: var(--success); }
-            .log-level.WARNING { color: #f59e0b; }
-            .log-level.ERROR { color: var(--danger); }
-
-            .log-msg {
-                color: #d4d4d8;
-            }
-
-            /* Endpoints Accordion */
-            details.endpoint-item {
-                background: var(--surface);
-                border: 1px solid var(--border);
-                border-radius: 4px;
-                overflow: hidden;
-            }
-
-            details.endpoint-item[open] {
-                border-color: var(--text-muted);
-            }
-
-            summary.endpoint-summary {
-                padding: 8px 12px;
-                cursor: pointer;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                user-select: none;
-                list-style: none;
-                font-size: 12px;
-            }
-
-            summary.endpoint-summary::-webkit-details-marker {
-                display: none;
-            }
-
-            .endpoint-left {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }
-
-            .method-badge {
-                font-family: var(--font-mono);
-                font-size: 10px;
-                font-weight: 600;
-                padding: 1px 5px;
-                border-radius: 3px;
-                background: var(--accent-dim);
-                color: var(--accent);
-                border: 1px solid rgba(59, 130, 246, 0.2);
-            }
-
-            .endpoint-path {
-                font-family: var(--font-mono);
-                color: var(--text-primary);
-                font-weight: 500;
-            }
-
-            .endpoint-content {
-                border-top: 1px solid var(--border-subtle);
-                background: var(--bg);
-                padding: 8px 10px;
-            }
-
-            pre.json-viewer {
-                background: var(--code-bg);
-                border: 1px solid var(--border-subtle);
-                border-radius: 4px;
-                padding: 8px;
-                font-family: var(--font-mono);
-                font-size: 11px;
-                color: #e4e4e7;
-                overflow-x: auto;
-                max-height: 160px;
-                line-height: 1.35;
-            }
-
-            .footer {
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                font-size: 11px;
-                color: var(--text-muted);
-                border-top: 1px solid var(--border);
-                padding-top: 6px;
-                flex-shrink: 0;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <!-- Header -->
-            <header class="header">
-                <div class="header-title-group">
-                    <h1 class="title">WebChat2Local</h1>
-                    <span class="version-tag">Gateway</span>
-                </div>
-                <div class="header-links" style="display:flex;gap:12px;">
-                    <a href="https://chat.deepseek.com" target="_blank" rel="noreferrer">DeepSeek 網頁 &rarr;</a>
-                    <a href="https://chatgpt.com" target="_blank" rel="noreferrer">ChatGPT 網頁 &rarr;</a>
-                    <a href="https://gemini.google.com" target="_blank" rel="noreferrer">Gemini 網頁 &rarr;</a>
-                </div>
-            </header>
-
-            <!-- Main Single-Page 2-Column Grid -->
-            <div class="main-layout">
-                
-                <!-- Left Column: Config & Session -->
-                <div class="left-column">
-                    <!-- Session Status Card -->
-                    <div class="card">
-                        <div class="section-label">會話狀態 (Session Status)</div>
-                        <div class="status-banner">
-                            <div class="status-indicator">
-                                <span class="status-dot" id="status-dot"></span>
-                                <span id="status-text">連線檢查中...</span>
-                            </div>
-                            <button class="btn-action" onclick="updateStatus(true)" style="padding:1px 6px;">手動整理</button>
-                        </div>
-                        <div class="session-meta-grid">
-                            <div class="meta-item">
-                                <div class="meta-label">帳號模式</div>
-                                <div class="meta-value" id="user-email">-</div>
-                            </div>
-                            <div class="meta-item">
-                                <div class="meta-label">方案等級</div>
-                                <div class="meta-value" id="user-plan">-</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Metrics -->
-                    <div class="stats-grid">
-                        <div class="stat-box">
-                            <div class="stat-title">總請求量</div>
-                            <div class="stat-number" id="stat-total">0</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-title">成功傳輸</div>
-                            <div class="stat-number" style="color:var(--success);" id="stat-success">0</div>
-                        </div>
-                        <div class="stat-box">
-                            <div class="stat-title">失敗異常</div>
-                            <div class="stat-number" style="color:var(--danger);" id="stat-failed">0</div>
-                        </div>
-                    </div>
-
-                    <!-- Client Config (1-Click Copyable) -->
-                    <div class="card">
-                        <div class="section-label">本地客戶端參數 (點擊即可複製)</div>
-                        <div class="config-list">
-                            <div class="config-item" onclick="copyCardValue('OpenAI Compatible', this)">
-                                <div class="config-label-group">
-                                    <span class="config-key">Provider</span>
-                                    <span class="config-val">OpenAI Compatible</span>
-                                </div>
-                                <span class="copy-hint">複製</span>
-                            </div>
-
-                            <div class="config-item" onclick="copyCardValue('http://127.0.0.1:8765/v1', this)">
-                                <div class="config-label-group">
-                                    <span class="config-key">Base URL</span>
-                                    <span class="config-val">http://127.0.0.1:8765/v1</span>
-                                </div>
-                                <span class="copy-hint">複製</span>
-                            </div>
-
-                            <div class="config-item" onclick="copyCardValue('sk-local', this)">
-                                <div class="config-label-group">
-                                    <span class="config-key">API Key</span>
-                                    <span class="config-val">sk-local</span>
-                                </div>
-                                <span class="copy-hint">複製</span>
-                            </div>
-
-                            <div class="model-section">
-                                <span class="config-key">可用模型 (點擊任一模型即複製)</span>
-                                <div class="model-chips-grid" id="model-chips-container">
-                                    <span style="font-size:11px;color:var(--text-muted);">載入可用模型中...</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Right Column: Terminal Logs & Endpoints -->
-                <div class="right-column">
-                    <!-- Live Terminal Box -->
-                    <div class="terminal-container">
-                        <div class="terminal-header">
-                            <div class="terminal-title">
-                                <span class="status-dot active"></span>
-                                <span>即時終端機日誌 (Live Console Logs)</span>
-                            </div>
-                            <div class="terminal-tools">
-                                <button class="btn-action" onclick="fetchLogs()">重新整理</button>
-                                <button class="btn-action" onclick="clearLogsUI()">清除畫面</button>
-                                <button class="btn-action" onclick="copyAllLogs(this)">複製全部</button>
-                            </div>
-                        </div>
-                        <div class="terminal-body" id="terminal-body">
-                            <div class="log-line"><span class="log-time">[系統啟動]</span> <span class="log-msg">WebChat2Local 終端機連線已就緒...</span></div>
-                        </div>
-                    </div>
-
-                    <!-- Collapsible Endpoints Inspection -->
-                    <div style="display:flex;flex-direction:column;gap:6px;">
-                        <!-- /v1/models inspection -->
-                        <details class="endpoint-item" id="details-models" ontoggle="if(this.open) loadModelsData();">
-                            <summary class="endpoint-summary">
-                                <div class="endpoint-left">
-                                    <span class="method-badge">GET</span>
-                                    <span class="endpoint-path">/v1/models</span>
-                                </div>
-                                <span style="font-size:10.5px;color:var(--text-muted);font-family:var(--font-mono);">展開模型 JSON ▼</span>
-                            </summary>
-                            <div class="endpoint-content">
-                                <pre class="json-viewer"><code id="models-json">載入中...</code></pre>
-                            </div>
-                        </details>
-
-                        <!-- /health inspection -->
-                        <details class="endpoint-item" id="details-health" ontoggle="if(this.open) loadHealthData();">
-                            <summary class="endpoint-summary">
-                                <div class="endpoint-left">
-                                    <span class="method-badge">GET</span>
-                                    <span class="endpoint-path">/health</span>
-                                </div>
-                                <span style="font-size:10.5px;color:var(--text-muted);font-family:var(--font-mono);">展開狀態 JSON ▼</span>
-                            </summary>
-                            <div class="endpoint-content">
-                                <pre class="json-viewer"><code id="health-json">載入中...</code></pre>
-                            </div>
-                        </details>
-                    </div>
-                </div>
-
-            </div>
-
-            <footer class="footer">
-                <span>WebChat2Local Gateway &bull; Local-first OpenAI Bridge</span>
-                <span>健康檢查頻率: 每 60 秒 (或手動刷新)</span>
-            </footer>
-        </div>
-
-        <script>
-            function copyCardValue(text, el) {
-                navigator.clipboard.writeText(text).then(() => {
-                    const hint = el.querySelector('.copy-hint');
-                    const origHint = hint ? hint.textContent : '';
-                    el.classList.add('copied');
-                    if (hint) hint.textContent = '已複製';
-                    setTimeout(() => {
-                        el.classList.remove('copied');
-                        if (hint) hint.textContent = origHint;
-                    }, 1500);
-                });
-            }
-
-            function copyChipValue(text, chipEl) {
-                navigator.clipboard.writeText(text).then(() => {
-                    chipEl.classList.add('copied');
-                    const origText = chipEl.textContent;
-                    chipEl.textContent = text + ' ✓';
-                    setTimeout(() => {
-                        chipEl.classList.remove('copied');
-                        chipEl.textContent = origText;
-                    }, 1500);
-                });
-            }
-
-            function copyAllLogs(btn) {
-                const term = document.getElementById('terminal-body');
-                navigator.clipboard.writeText(term.innerText).then(() => {
-                    const orig = btn.textContent;
-                    btn.textContent = '已複製';
-                    setTimeout(() => { btn.textContent = orig; }, 1500);
-                });
-            }
-
-            function clearLogsUI() {
-                document.getElementById('terminal-body').innerHTML = '<div class="log-line"><span class="log-time">[清除]</span> <span class="log-msg">日誌畫面已重設</span></div>';
-            }
-
-            async function updateStatus(isManual = false) {
-                try {
-                    const resp = await fetch('/health');
-                    if (!resp.ok) throw new Error('Health check error');
-                    const data = await resp.json();
-
-                    const dot = document.getElementById('status-dot');
-                    const text = document.getElementById('status-text');
-                    const email = document.getElementById('user-email');
-                    const plan = document.getElementById('user-plan');
-                    
-                    document.getElementById('stat-total').textContent = data.stats?.total_requests || 0;
-                    document.getElementById('stat-success').textContent = data.stats?.successful_requests || 0;
-                    document.getElementById('stat-failed').textContent = data.stats?.failed_requests || 0;
-
-                    if (data.browser_connected) {
-                        dot.className = 'status-dot active';
-                        text.textContent = '已連線 (Connected)';
-                        text.style.color = 'var(--text-primary)';
-                        email.textContent = data.client_info?.email || '已認證';
-                        plan.textContent = data.client_info?.plan || 'Free / Plus';
-                    } else {
-                        dot.className = 'status-dot inactive';
-                        text.textContent = '未連線 (等待 ChatGPT 網頁)';
-                        text.style.color = 'var(--text-muted)';
-                        email.textContent = '-';
-                        plan.textContent = '-';
-                    }
-
-                    const healthEl = document.getElementById('health-json');
-                    if (healthEl && document.getElementById('details-health').open) {
-                        healthEl.textContent = JSON.stringify(data, null, 2);
-                    }
-                } catch (e) {
-                    const dot = document.getElementById('status-dot');
-                    const text = document.getElementById('status-text');
-                    dot.className = 'status-dot inactive';
-                    text.textContent = '伺服器通訊異常';
-                }
-            }
-
-            async function fetchLogs() {
-                try {
-                    const resp = await fetch('/api/logs');
-                    if (!resp.ok) return;
-                    const logs = await resp.json();
-                    const term = document.getElementById('terminal-body');
-                    if (logs && logs.length > 0) {
-                        term.innerHTML = logs.map(l => `
-                            <div class="log-line">
-                                <span class="log-time">[${l.time}]</span>
-                                <span class="log-level ${l.level}">[${l.level}]</span>
-                                <span class="log-msg">${l.msg.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</span>
-                            </div>
-                        `).join('');
-                        term.scrollTop = term.scrollHeight;
-                    }
-                } catch (e) {}
-            }
-
-            async function fetchAndRenderModels() {
-                const container = document.getElementById('model-chips-container');
-                try {
-                    const resp = await fetch('/v1/models');
-                    const data = await resp.json();
-                    if (data && data.data && data.data.length > 0) {
-                        container.innerHTML = '';
-                        data.data.forEach(m => {
-                            const chip = document.createElement('button');
-                            chip.className = 'model-chip';
-                            chip.title = '點擊複製 Model ID: ' + m.id;
-                            chip.textContent = m.id;
-                            chip.onclick = () => copyChipValue(m.id, chip);
-                            container.appendChild(chip);
-                        });
-                    }
-                } catch (e) {
-                    container.innerHTML = '<span style="font-size:11px;color:var(--danger);">無法讀取模型清單</span>';
-                }
-            }
-
-            async function loadModelsData() {
-                const el = document.getElementById('models-json');
-                el.textContent = '載入中...';
-                try {
-                    const resp = await fetch('/v1/models');
-                    const data = await resp.json();
-                    el.textContent = JSON.stringify(data, null, 2);
-                } catch (e) {
-                    el.textContent = '無法獲取模型資料: ' + e.message;
-                }
-            }
-
-            async function loadHealthData() {
-                const el = document.getElementById('health-json');
-                el.textContent = '載入中...';
-                try {
-                    const resp = await fetch('/health');
-                    const data = await resp.json();
-                    el.textContent = JSON.stringify(data, null, 2);
-                } catch (e) {
-                    el.textContent = '無法獲取健康狀態: ' + e.message;
-                }
-            }
-
-            // Initial load
-            fetchAndRenderModels();
-            updateStatus();
-            fetchLogs();
-
-            // Low-frequency health check (every 120s) to avoid spam
-            setInterval(() => {
-                if (!document.hidden) {
-                    updateStatus();
-                }
-            }, 120000);
-
-            // Log update (every 15s when tab is active)
-            setInterval(() => {
-                if (!document.hidden) {
-                    fetchLogs();
-                }
-            }, 15000);
-        </script>
-    </body>
-    </html>
-    """
+async def serve_dashboard():
+    static_dir = os.path.join(os.path.dirname(__file__), "static", "studio")
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return "<h1>WebChat2Local Gateway & Studio Dashboard</h1><a href='/studio'>Open Studio</a>"
