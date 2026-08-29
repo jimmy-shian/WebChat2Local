@@ -72,6 +72,7 @@ class AgentOrchestrator:
         # Prepare Web LLM Job
         request_id = str(uuid.uuid4())
         job_data = {
+            "type": "chat_request",
             "request_id": request_id,
             "model": model,
             "messages": [

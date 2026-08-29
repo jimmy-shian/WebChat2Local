@@ -314,6 +314,10 @@ body {
     outline: none;
 }
 
+.hidden {
+    display: none !important;
+}
+
 .diff-review-bar {
     position: absolute;
     top: 0;
@@ -327,6 +331,9 @@ body {
     align-items: center;
     justify-content: space-between;
     z-index: 10;
+}
+.diff-review-bar.hidden {
+    display: none !important;
 }
 .diff-tag {
     background: var(--yellow);

@@ -75,11 +75,11 @@
                         <textarea id="basic-textarea" spellcheck="false" placeholder="點擊左側檔案開始編輯..."></textarea>
                     </div>
 
-                    <!-- ChangeSet Diff Review Bar (Visible when proposal is pending) -->
-                    <div id="diff-review-bar" class="diff-review-bar hidden">
+                    <!-- ChangeSet Diff Review Bar (Visible only when proposal is pending) -->
+                    <div id="diff-review-bar" class="diff-review-bar hidden" style="display: none;">
                         <div class="diff-info">
                             <span class="diff-tag">AI 檔案修改提案審查</span>
-                            <span id="diff-target-file" class="diff-path">path/to/file</span>
+                            <span id="diff-target-file" class="diff-path"></span>
                         </div>
                         <div class="diff-actions">
                             <button id="btn-diff-accept" class="btn btn-primary btn-sm">批准套用 (Accept ✓)</button>

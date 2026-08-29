@@ -262,22 +262,41 @@ async function saveActiveFile() {
         alert('請先在左側檔案樹選擇或新增檔案！');
         return;
     }
+    const file = state.openFiles.find(f => f.path === state.activeFile);
+    if (!file) return;
+
+    let targetPath = file.path;
+    if (file.isVirtual) {
+        const inputName = prompt('請輸入儲存路徑與檔案名稱 (例如: src/app.py 或 New.txt):', file.name);
+        if (!inputName || !inputName.trim()) return;
+        targetPath = inputName.trim();
+        // Create file first
+        await fetch('/api/workspace/file/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: targetPath, content: '' })
+        });
+        file.path = targetPath;
+        file.name = targetPath.split('/').pop();
+        file.isVirtual = false;
+        state.activeFile = targetPath;
+    }
+
     const content = state.editorInstance ? state.editorInstance.getValue() : (document.getElementById('basic-textarea')?.value || '');
     try {
         const res = await fetch('/api/workspace/file/save', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: state.activeFile, content: content })
+            body: JSON.stringify({ path: targetPath, content: content })
         });
         const data = await res.json();
         if (data.success) {
-            const file = state.openFiles.find(f => f.path === state.activeFile);
-            if (file) {
-                file.isDirty = false;
-                file.revision = data.revision;
-                renderTabs();
-            }
-            appendTerminal(`[檔案已儲存] ${state.activeFile} (Revision: ${data.revision ? data.revision.slice(0, 16) : ''}...)`, 'sys');
+            file.isDirty = false;
+            file.revision = data.revision;
+            file.content = content;
+            renderTabs();
+            await loadWorkspaceTree();
+            appendTerminal(`[檔案已儲存] ${targetPath} (Revision: ${data.revision ? data.revision.slice(0, 16) : ''}...)`, 'sys');
         } else {
             alert('儲存失敗: ' + (data.error || '未知錯誤'));
         }
@@ -287,27 +306,36 @@ async function saveActiveFile() {
 }
 window.saveActiveFile = saveActiveFile;
 
-async function createNewFile() {
-    const filename = prompt('請輸入新檔案名稱 (例如: src/index.js 或 demo.py):');
-    if (!filename || !filename.trim()) return;
-    const cleanPath = filename.trim();
-    try {
-        const res = await fetch('/api/workspace/file/create', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: cleanPath, content: '' })
-        });
-        const data = await res.json();
-        if (data.success) {
-            await loadWorkspaceTree();
-            await openFile(cleanPath, cleanPath.split('/').pop());
-            appendTerminal(`[檔案已建立] ${cleanPath}`, 'sys');
-        } else {
-            alert('建立失敗: ' + (data.error || '檔案可能已存在'));
+let untitledCounter = 1;
+function createNewFile() {
+    const virtualName = `未命名-${untitledCounter++}.txt`;
+    const virtualFile = {
+        path: virtualName,
+        name: virtualName,
+        content: '',
+        revision: '',
+        isDirty: true,
+        isVirtual: true
+    };
+    state.openFiles.push(virtualFile);
+    state.activeFile = virtualName;
+
+    const activeFileTag = document.getElementById('active-file-tag');
+    if (activeFileTag) activeFileTag.textContent = `當前分頁: ${virtualName}`;
+
+    if (state.editorInstance && window.monaco) {
+        const model = monaco.editor.createModel('', 'plaintext');
+        state.editorInstance.setModel(model);
+        state.editorInstance.focus();
+    } else {
+        const textarea = document.getElementById('basic-textarea');
+        if (textarea) {
+            textarea.value = '';
+            textarea.focus();
         }
-    } catch(e) {
-        alert('建立失敗: ' + e.message);
     }
+    renderTabs();
+    appendTerminal(`[建立虛擬佔位檔案] ${virtualName} (按 Ctrl+S 輸入名稱儲存)`, 'sys');
 }
 window.createNewFile = createNewFile;
 
@@ -559,6 +587,7 @@ function showDiffReviewBar(proposal) {
     if (!bar) return;
     state.pendingProposal = proposal;
     if (pathEl) pathEl.textContent = proposal.path || 'file.txt';
+    bar.style.display = 'flex';
     bar.classList.remove('hidden');
 
     const acceptBtn = document.getElementById('btn-diff-accept');
@@ -573,9 +602,12 @@ window.acceptProposal = async (proposalId) => {
         const data = await res.json();
         alert(`提案 ${proposalId} 已成功寫入磁碟！`);
         const bar = document.getElementById('diff-review-bar');
-        if (bar) bar.classList.add('hidden');
-        loadWorkspaceTree();
-        if (state.activeFile) openFile(state.activeFile, state.activeFile.split('/').pop());
+        if (bar) {
+            bar.style.display = 'none';
+            bar.classList.add('hidden');
+        }
+        await loadWorkspaceTree();
+        if (state.activeFile) await openFile(state.activeFile, state.activeFile.split('/').pop());
     } catch(e) {
         alert(`套用失敗: ${e.message}`);
     }
@@ -586,7 +618,10 @@ window.rejectProposal = async (proposalId) => {
         await fetch(`/api/proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST' });
         alert(`提案 ${proposalId} 已捨棄。`);
         const bar = document.getElementById('diff-review-bar');
-        if (bar) bar.classList.add('hidden');
+        if (bar) {
+            bar.style.display = 'none';
+            bar.classList.add('hidden');
+        }
     } catch(e) {
         alert(`操作失敗: ${e.message}`);
     }
