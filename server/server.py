@@ -558,10 +558,25 @@ class SessionCreate(BaseModel):
 class EditProposalRequest(BaseModel):
     path: str
     content: str
+
+class TerminalRunRequest(BaseModel):
+    command: str
+    cwd: Optional[str] = None
+    timeout: Optional[int] = 30
     
+class AgentChatRequest(BaseModel):
+    session_id: str
+    prompt: str
+    active_file: Optional[str] = None
+    mode: Optional[str] = "ASK"
+    model: Optional[str] = "auto"
+
 # Store sessions and proposals in memory
 SESSIONS = {}
 PROPOSALS = {}
+
+from server.agent.agent_orchestrator import AgentOrchestrator
+orchestrator = AgentOrchestrator()
 
 @app.get("/api/providers")
 async def get_providers():
@@ -585,8 +600,7 @@ async def get_provider_health(provider_name: str):
 
 @app.post("/api/sessions")
 async def create_session(session: SessionCreate):
-    import uuid
-    session_id = str(uuid.uuid4())
+    session_id = orchestrator.create_session()
     SESSIONS[session_id] = {"mode": session.mode}
     return {"session_id": session_id, "mode": session.mode}
 
@@ -594,6 +608,7 @@ async def create_session(session: SessionCreate):
 async def cancel_session(session_id: str):
     if session_id in SESSIONS:
         del SESSIONS[session_id]
+        orchestrator.cancel_session(session_id)
         return {"status": "cancelled"}
     raise HTTPException(status_code=404, detail="Session not found")
 
@@ -602,7 +617,6 @@ async def accept_proposal_endpoint(proposal_id: str):
     if proposal_id in PROPOSALS:
         prop = PROPOSALS[proposal_id]
         prop["status"] = "accepted"
-        # If proposal has base_revision and new_content, apply it safely
         if "base_revision" in prop and "new_content" in prop:
             workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
             from server.tools.edit_engine import apply_proposal
@@ -619,9 +633,11 @@ async def reject_proposal_endpoint(proposal_id: str):
     raise HTTPException(status_code=404, detail="Proposal not found")
 
 @app.get("/api/workspace/tree")
-async def get_workspace_tree():
+async def get_workspace_tree(path: Optional[str] = "."):
     workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
-    return list_directory(workspace, ".")
+    res = list_directory(workspace, path)
+    res["path"] = path
+    return res
 
 @app.get("/api/workspace/file")
 async def get_workspace_file(path: str):
@@ -634,6 +650,58 @@ async def edit_workspace_file(req: EditProposalRequest):
     proposal_id = str(uuid.uuid4())
     PROPOSALS[proposal_id] = {"path": req.path, "content": req.content, "status": "pending"}
     return {"proposal_id": proposal_id}
+
+@app.post("/api/terminal/run")
+async def terminal_run(req: TerminalRunRequest):
+    import asyncio
+    import time
+    cmd = f'powershell -NoProfile -NonInteractive -Command "{req.command}"'
+    start_time = time.time()
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            cmd,
+            cwd=req.cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=req.timeout)
+        except asyncio.TimeoutError:
+            proc.kill()
+            stdout, stderr = await proc.communicate()
+            
+        exit_code = proc.returncode
+        execution_time_ms = int((time.time() - start_time) * 1000)
+        
+        return {
+            "exit_code": exit_code,
+            "stdout": stdout.decode(errors="replace") if stdout else "",
+            "stderr": stderr.decode(errors="replace") if stderr else "",
+            "execution_time_ms": execution_time_ms
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.websocket("/api/terminal/ws")
+async def terminal_ws(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_text(f"Executed: {data}")
+    except WebSocketDisconnect:
+        pass
+
+@app.post("/api/agent/chat")
+async def agent_chat_endpoint(req: AgentChatRequest):
+    async def event_generator():
+        async for event in orchestrator.run_turn(req.session_id, req.prompt, req.active_file, req.model or "auto"):
+            yield f"event: {event.get('type', 'message')}\ndata: {json.dumps(event)}\n\n"
+            
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream"
+    )
 
 @app.get("/studio")
 async def serve_studio():

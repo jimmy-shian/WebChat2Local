@@ -36,7 +36,7 @@ def test_studio_html():
     response = client.get("/studio")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
-    assert "WebChat2Local Studio Shell" in response.text
+    assert "WebChat2Local Studio" in response.text
 
 def test_proposal_accept_reject():
     # create proposal
@@ -53,3 +53,35 @@ def test_proposal_accept_reject():
     res_reject = client.post(f"/api/proposals/{proposal_id}/reject")
     assert res_reject.status_code == 200
     assert res_reject.json()["status"] == "rejected"
+
+def test_terminal_run():
+    response = client.post("/api/terminal/run", json={"command": "echo hello", "timeout": 5})
+    assert response.status_code == 200
+    data = response.json()
+    assert "exit_code" in data
+    assert "stdout" in data
+    assert "hello" in data["stdout"].lower()
+
+def test_workspace_tree_path():
+    response = client.get("/api/workspace/tree?path=server")
+    assert response.status_code == 200
+    data = response.json()
+    assert "entries" in data
+    assert data["path"] == "server"
+
+def test_agent_chat():
+    # First create a session
+    sess_res = client.post("/api/sessions", json={"mode": "ASK"})
+    session_id = sess_res.json()["session_id"]
+    
+    response = client.post("/api/agent/chat", json={
+        "session_id": session_id,
+        "prompt": "Hello",
+    })
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    
+    # Just read the response text
+    content = response.text
+    assert "event: message.chunk" in content
+    assert "event: agent.completed" in content

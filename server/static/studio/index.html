@@ -3,52 +3,215 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebChat2Local Studio Shell</title>
-    <link rel="stylesheet" href="/static/studio/studio.css">
+    <title>WebChat2Local Studio v4</title>
+    <link rel="stylesheet" href="studio.css">
+    <!-- Monaco Editor requires a container and minimal styling -->
+    <style>
+        #editor-container {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+    </style>
 </head>
 <body>
-    <div class="layout">
-        <!-- Left: Workspace File Navigator -->
-        <div class="pane left-pane">
-            <div class="header">Workspace</div>
-            <div class="content" id="file-tree"></div>
-        </div>
-
-        <!-- Center: Monaco Editor & Live Diff Viewer + Terminal -->
-        <div class="pane center-pane">
-            <div class="header">Editor <span id="current-file" style="margin-left: 10px; color: var(--text-muted);"></span></div>
-            <div id="editor-container">
-                <textarea id="editor" style="width:100%; height:100%; background:var(--bg); color:var(--text); border:none; padding:10px; font-family:monospace; resize:none;" spellcheck="false"></textarea>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo">
+                <span class="logo-icon">▲</span>
+                <span class="logo-text">WebChat2Local Studio</span>
             </div>
-            <div class="terminal-console" id="terminal">
-                <div>PS C:\Workspace> _</div>
+            <div class="header-actions">
+                <button id="btn-docs" class="btn btn-ghost" title="Docs & Specs">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+                    <span>說明書與規格指引</span>
+                </button>
+                <button id="btn-settings" class="btn btn-ghost" title="Settings">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    <span>伺服器與模型設定</span>
+                </button>
             </div>
-        </div>
+        </header>
 
-        <!-- Right: AI Agent Chat Sidebar -->
-        <div class="pane right-pane">
-            <div class="header">
-                <div>AI Assistant</div>
-                <div style="margin-top:5px;">
-                    <span class="mode-pill active">ASK</span>
-                    <span class="mode-pill">PLAN</span>
-                    <span class="mode-pill">CODE</span>
-                    <span class="mode-pill">DEBUG</span>
-                    <span class="mode-pill">AGENT</span>
+        <div class="main-content">
+            <!-- Sidebar / Workspace Tree -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h3>Explorer</h3>
+                    <div class="sidebar-actions">
+                        <button id="btn-new-file" title="New File"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg></button>
+                        <button id="btn-new-folder" title="New Folder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg></button>
+                        <button id="btn-refresh" title="Refresh"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></button>
+                    </div>
                 </div>
+                <div class="file-tree" id="file-tree">
+                    <!-- Dynamic Tree populated via JS -->
+                </div>
+            </aside>
+
+            <!-- Center Panel (Editor + Terminal) -->
+            <section class="center-panel">
+                <!-- Editor Tabs -->
+                <div class="editor-tabs" id="editor-tabs">
+                    <!-- Dynamic Tabs -->
+                </div>
+                <!-- Monaco Editor Area -->
+                <div class="editor-area">
+                    <div id="editor-container"></div>
+                    <div id="fallback-editor" style="display:none; width:100%; height:100%;">
+                        <textarea id="basic-textarea" style="width:100%; height:100%; background:#1e1e1e; color:#d4d4d4; border:none; padding:10px; font-family:monospace;"></textarea>
+                    </div>
+                </div>
+                <!-- Terminal Pane -->
+                <div class="terminal-pane">
+                    <div class="terminal-header">
+                        <span class="terminal-title">Terminal - PowerShell</span>
+                        <div class="terminal-actions">
+                            <button id="btn-term-clear" title="Clear Terminal"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                            <button id="btn-term-kill" title="Kill Process"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg></button>
+                            <button id="btn-term-max" title="Maximize/Minimize"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg></button>
+                        </div>
+                    </div>
+                    <div class="terminal-output" id="terminal-output">
+                        <div class="term-line welcome">WebChat2Local Studio Terminal Initialized.</div>
+                    </div>
+                    <div class="terminal-input-bar">
+                        <span class="prompt">PS&gt;</span>
+                        <input type="text" id="terminal-input" placeholder="Type command e.g. dir, python test.py..." autocomplete="off" spellcheck="false">
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Sidebar / Agent Chat -->
+            <aside class="chat-panel">
+                <div class="chat-header">
+                    <div class="mode-selector">
+                        <button class="mode-btn active" data-mode="AGENT">AGENT</button>
+                        <button class="mode-btn" data-mode="ASK">ASK</button>
+                        <button class="mode-btn" data-mode="PLAN">PLAN</button>
+                        <button class="mode-btn" data-mode="CODE">CODE</button>
+                        <button class="mode-btn" data-mode="DEBUG">DEBUG</button>
+                    </div>
+                    <div class="chat-status">
+                        <span class="status-indicator online"></span>
+                        <span class="tokens">~0 tkns</span>
+                    </div>
+                </div>
+                <div class="chat-history" id="chat-history">
+                    <div class="chat-message system">
+                        <div class="msg-content">Agent connected. Ready to assist.</div>
+                    </div>
+                </div>
+                <div class="chat-input-container">
+                    <textarea id="chat-input" placeholder="Ask AI or press @ to mention files..." rows="2"></textarea>
+                    <div id="at-mention-popup" class="mention-popup hidden"></div>
+                    <div class="chat-input-actions">
+                        <button id="btn-send-chat" class="btn btn-primary">Send ⏎</button>
+                    </div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <!-- Docs & Specs Modal -->
+    <div id="modal-docs" class="modal hidden">
+        <div class="modal-content large">
+            <div class="modal-header">
+                <h2>說明書與規格指引 (Docs & Specs)</h2>
+                <button class="btn-close-modal">✕</button>
             </div>
-            <div class="content" id="chat-messages">
-                <div class="chat-message">Agent: Hello! I'm ready to help.</div>
-            </div>
-            <div class="input-area">
-                <input type="text" id="chat-input" placeholder="Ask something (@file to attach context)..." onkeypress="if(event.key === 'Enter') sendMessage()">
-                <div style="display:flex; justify-content:space-between;">
-                    <button onclick="sendMessage()">Send</button>
-                    <label style="font-size:12px; margin-top:8px;"><input type="checkbox"> Auto-pilot</label>
+            <div class="modal-body">
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="doc-quickstart">快速上手</button>
+                    <button class="tab-btn" data-tab="doc-tools">工具規範</button>
+                    <button class="tab-btn" data-tab="doc-mcp">本地 MCP Server</button>
+                    <button class="tab-btn" data-tab="doc-agent">權限與 Agent</button>
+                    <button class="tab-btn" data-tab="doc-rules">系統 Prompt</button>
+                </div>
+                <div class="tab-content active" id="doc-quickstart">
+                    <h3>5分鐘指引</h3>
+                    <p>1. 連線 ChatGPT / Gemini / DeepSeek 擴充套件。</p>
+                    <p>2. 開啟 Studio 並確認右下角綠燈。</p>
+                    <p>3. 於右側對話框下達第一個 AI Coding 指令，例如「幫我建立一個 index.html」。</p>
+                </div>
+                <div class="tab-content" id="doc-tools">
+                    <h3>工具規範 (Tool Specs)</h3>
+                    <p>支援 7 款 Canonical Tools：</p>
+                    <ul>
+                        <li><code>read_file</code></li>
+                        <li><code>edit_file</code></li>
+                        <li><code>create_file</code></li>
+                        <li><code>delete_file</code></li>
+                        <li><code>list_directory</code></li>
+                        <li><code>grep_search</code></li>
+                        <li><code>run_command</code></li>
+                    </ul>
+                </div>
+                <div class="tab-content" id="doc-mcp">
+                    <h3>本地 MCP Server 指引</h3>
+                    <p>如何在 Eclipse Theia、Cursor、Claude Desktop 中設定 STDIO (<code>python -m server.mcp.mcp_server</code>) 或 Streamable HTTP (<code>http://127.0.0.1:8765/mcp</code>)。</p>
+                </div>
+                <div class="tab-content" id="doc-agent">
+                    <h3>權限與 Agent 模式</h3>
+                    <p>支援 <code>ASK</code>, <code>PLAN</code>, <code>CODE</code>, <code>DEBUG</code>, <code>AGENT</code> 模式。</p>
+                    <p>4 級權限策略：<code>AUTO</code>, <code>CONFIRM</code>, <code>SESSION_ALLOW</code>, <code>DENY</code>。</p>
+                </div>
+                <div class="tab-content" id="doc-rules">
+                    <h3>系統 Prompt 與 Rules</h3>
+                    <p>在專案中建立 <code>.webchat2local/rules/</code> 自訂規則，系統會自動載入。</p>
                 </div>
             </div>
         </div>
     </div>
-    <script src="/static/studio/studio.js"></script>
+
+    <!-- Settings Modal -->
+    <div id="modal-settings" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚙️ 伺服器與模型設定</h2>
+                <button class="btn-close-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Web Provider 狀態</label>
+                    <div class="provider-status">
+                        <span class="badge connected">ChatGPT: Connected</span>
+                        <span class="badge disconnected">Gemini: Disconnected</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>預設 Agent 模式</label>
+                    <select id="setting-agent-mode" class="input-select">
+                        <option value="AGENT">AGENT</option>
+                        <option value="ASK">ASK</option>
+                        <option value="PLAN">PLAN</option>
+                        <option value="CODE">CODE</option>
+                        <option value="DEBUG">DEBUG</option>
+                    </select>
+                </div>
+                <div class="form-group flex-row">
+                    <label>Auto-pilot 模式</label>
+                    <label class="switch">
+                        <input type="checkbox" id="setting-autopilot">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="form-group">
+                    <label>自訂 System Prompt</label>
+                    <textarea id="setting-system-prompt" rows="4" class="input-text"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Monaco Editor Scripts -->
+    <script>var require = { paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } };</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.js"></script>
+    <script src="studio.js"></script>
 </body>
 </html>
