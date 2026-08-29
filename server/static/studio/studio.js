@@ -699,6 +699,59 @@ function setupModals() {
     bindModal('btn-docs', 'modal-docs');
     bindModal('btn-settings', 'modal-settings');
 
+    // Workspace Folder Modal Binding
+    const wsBadge = document.getElementById('workspace-badge');
+    const wsModal = document.getElementById('modal-workspace');
+    const wsInput = document.getElementById('input-workspace-path');
+    const wsSaveBtn = document.getElementById('btn-save-workspace');
+
+    async function loadWorkspaceInfo() {
+        try {
+            const res = await fetch('/api/workspace/info');
+            const data = await res.json();
+            const wsPathEl = document.getElementById('workspace-path');
+            if (wsPathEl && data.workspace_name) {
+                wsPathEl.textContent = data.workspace_name;
+            }
+            if (wsInput && data.workspace_root) {
+                wsInput.value = data.workspace_root;
+            }
+        } catch(e) {
+            console.error('Failed to get workspace info', e);
+        }
+    }
+    loadWorkspaceInfo();
+
+    if (wsBadge && wsModal) {
+        wsBadge.addEventListener('click', async () => {
+            await loadWorkspaceInfo();
+            wsModal.classList.remove('hidden');
+        });
+    }
+
+    if (wsSaveBtn && wsInput) {
+        wsSaveBtn.addEventListener('click', async () => {
+            const newPath = wsInput.value.trim();
+            if (!newPath) return;
+            try {
+                const res = await fetch('/api/workspace/set_root', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: newPath })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    const wsPathEl = document.getElementById('workspace-path');
+                    if (wsPathEl) wsPathEl.textContent = data.workspace_name;
+                    wsModal.classList.add('hidden');
+                    loadWorkspaceTree('.');
+                }
+            } catch(e) {
+                alert('切換工作區失敗: ' + e);
+            }
+        });
+    }
+
     const provMcp = document.getElementById('prov-mcp');
     if (provMcp) {
         provMcp.addEventListener('click', () => {

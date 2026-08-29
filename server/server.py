@@ -653,21 +653,53 @@ async def reject_proposal_endpoint(proposal_id: str):
         return {"status": "rejected", "proposal_id": proposal_id}
     raise HTTPException(status_code=404, detail="Proposal not found")
 
+class WorkspaceSetRootRequest(BaseModel):
+    path: str
+
+@app.get("/api/workspace/info")
+async def get_workspace_info():
+    ws = orchestrator.workspace_root
+    return {
+        "workspace_root": ws,
+        "workspace_name": os.path.basename(ws) or ws
+    }
+
+@app.post("/api/workspace/set_root")
+async def set_workspace_root(req: WorkspaceSetRootRequest):
+    target_path = os.path.abspath(req.path)
+    if not os.path.exists(target_path):
+        try:
+            os.makedirs(target_path, exist_ok=True)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"無法建立指定目錄: {str(e)}")
+            
+    os.environ["W2L_WORKSPACE"] = target_path
+    orchestrator.workspace_root = target_path
+    orchestrator.context_manager.workspace_root = target_path
+    orchestrator.tool_executor.workspace_root = target_path
+    orchestrator.prompt_builder.workspace_root = target_path.replace("\\", "/")
+    
+    return {
+        "success": True,
+        "workspace_root": target_path,
+        "workspace_name": os.path.basename(target_path) or target_path
+    }
+
 @app.get("/api/workspace/tree")
 async def get_workspace_tree(path: Optional[str] = "."):
-    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    workspace = orchestrator.workspace_root
     res = list_directory(workspace, path)
     res["path"] = path
     return res
 
 @app.get("/api/workspace/file")
 async def get_workspace_file(path: str):
-    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    workspace = orchestrator.workspace_root
     return read_file(workspace, path)
 
 @app.post("/api/workspace/file/save")
 async def save_workspace_file(req: FileSaveRequest):
-    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    workspace = orchestrator.workspace_root
     from server.tools.workspace_security import WorkspaceSecurityPolicy
     policy = WorkspaceSecurityPolicy(workspace)
     full_path = policy.validate_path(req.path)
@@ -679,14 +711,14 @@ async def save_workspace_file(req: FileSaveRequest):
 
 @app.post("/api/workspace/file/create")
 async def create_workspace_file_endpoint(req: FileCreateRequest):
-    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    workspace = orchestrator.workspace_root
     from server.tools.edit_engine import create_file
     res = create_file(workspace, req.path, req.content or "")
     return res
 
 @app.post("/api/workspace/file/delete")
 async def delete_workspace_file_endpoint(req: FileDeleteRequest):
-    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    workspace = orchestrator.workspace_root
     from server.tools.edit_engine import delete_file, read_file
     rev = req.revision
     if not rev:

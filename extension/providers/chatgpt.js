@@ -104,40 +104,34 @@ const ChatGPTProvider = {
   },
 
   extractResponse: function (promptSnippet) {
-    // Prefer precise assistant message containers; fall back to broader ones.
-    const candidates = Array.from(
-      document.querySelectorAll(
-        '[data-message-author-role="assistant"], article, div[class*="agent-turn"], div[class*="message"]'
-      )
-    );
+    // 1. Primary precise selector on modern ChatGPT Web
+    const assistantEls = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+    if (assistantEls.length > 0) {
+      const target = assistantEls[assistantEls.length - 1];
+      const mdEl = target.querySelector(".markdown") || target.querySelector("[class*='markdown']") || target;
+      const res = window.WebChat2LocalMarkdown ? window.WebChat2LocalMarkdown.serialize(mdEl) : (mdEl.innerText || mdEl.textContent || "");
+      if (res && res.trim().length > 0) {
+        return res.trim();
+      }
+    }
 
-    // Garbage patterns: citation/source panels and UI chrome that are NOT the answer.
-    const GARBAGE_RE = /資料來源|data-reference-detail-header|_sCvC0W_header/i;
-
-    const nonUser = candidates.filter((el) => {
-      const isUser =
-        el.getAttribute("data-message-author-role") === "user" ||
-        el.querySelector('[data-message-author-role="user"]');
-      const text = el.innerText || el.textContent || "";
-      if (isUser) return false;
-      if (promptSnippet && text.includes(promptSnippet)) return false;
-      if (text.trim().length === 0) return false;
-      // Skip pure citation/source header panels.
-      if (GARBAGE_RE.test(text) && text.trim().length < 200) return false;
-      return true;
+    // 2. Secondary fallback: articles that are not user role
+    const articles = Array.from(document.querySelectorAll("article"));
+    const nonUserArticles = articles.filter((el) => {
+      const isUser = el.getAttribute("data-message-author-role") === "user" || el.querySelector('[data-message-author-role="user"]');
+      return !isUser;
     });
 
-    if (nonUser.length === 0) return "";
-
-    const target = nonUser[nonUser.length - 1];
-    const mdEl = target.querySelector(".markdown") || target.querySelector("[class*='markdown']") || target;
-    const serialized = window.WebChat2LocalMarkdown.serialize(mdEl);
-
-    // Final guard: if serialization produced only a garbage header, reject it.
-    if (serialized && GARBAGE_RE.test(serialized) && serialized.replace(/<[^>]*>/g, "").trim().length < 50) {
-      return "";
+    if (nonUserArticles.length > 0) {
+      const target = nonUserArticles[nonUserArticles.length - 1];
+      const mdEl = target.querySelector(".markdown") || target.querySelector("[class*='markdown']") || target;
+      const res = window.WebChat2LocalMarkdown ? window.WebChat2LocalMarkdown.serialize(mdEl) : (mdEl.innerText || mdEl.textContent || "");
+      if (res && res.trim().length > 0) {
+        return res.trim();
+      }
     }
-    return serialized;
+
+    return "";
   },
 };
 

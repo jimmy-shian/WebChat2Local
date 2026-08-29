@@ -364,6 +364,29 @@
         </div>
     </div>
 
+    <!-- Modal: Workspace Selector -->
+    <div id="modal-workspace" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>📂 切換工作區資料夾 (Change Workspace)</h3>
+                <button class="btn-close-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+                    請輸入您要切換的本機專案絕對路徑。切換後，Studio 檔案總管與工具操作將立即以該資料夾為根目錄。
+                </p>
+                <div class="form-group" style="margin-bottom:12px;">
+                    <label style="font-size:12px; color:var(--text); margin-bottom:4px; display:block;">工作區路徑 (Workspace Path):</label>
+                    <input type="text" id="input-workspace-path" class="form-input" style="width:100%; box-sizing:border-box; background:var(--bg-base); color:var(--text); border:1px solid var(--border); padding:8px; border-radius:6px;" placeholder="例如 D:\my_project 或 C:\Users\..." />
+                </div>
+                <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:16px;">
+                    <button class="btn btn-secondary btn-close-modal">取消</button>
+                    <button id="btn-save-workspace" class="btn btn-primary">確認切換</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Monaco AMD Loader & Studio Controller -->
     <script>var require = { paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } };</script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.js"></script>
