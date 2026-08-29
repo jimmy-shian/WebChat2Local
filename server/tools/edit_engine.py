@@ -3,13 +3,13 @@ import hashlib
 import uuid
 import difflib
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from .workspace_security import WorkspaceSecurityPolicy, WorkspaceSecurityError
 
 def compute_hash(content: bytes) -> str:
     return "sha256:" + hashlib.sha256(content).hexdigest()
 
-def read_file(workspace_root: str, path: str) -> dict:
+def read_file(workspace_root: str, path: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> dict:
     policy = WorkspaceSecurityPolicy(workspace_root)
     full_path = policy.validate_path(path)
     
@@ -19,6 +19,22 @@ def read_file(workspace_root: str, path: str) -> dict:
     content_str = content_bytes.decode("utf-8")
     revision = compute_hash(content_bytes)
     
+    if start_line is not None or end_line is not None:
+        lines = content_str.splitlines(keepends=True)
+        total_lines = len(lines)
+        s = max(1, start_line) if start_line is not None else 1
+        e = min(total_lines, end_line) if end_line is not None else total_lines
+        sliced_lines = lines[s - 1: e]
+        sliced_content = "".join(sliced_lines)
+        return {
+            "path": path,
+            "revision": revision,
+            "content": sliced_content,
+            "start_line": s,
+            "end_line": e,
+            "total_lines": total_lines
+        }
+
     return {
         "path": path,
         "revision": revision,

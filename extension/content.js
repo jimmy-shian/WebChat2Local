@@ -252,15 +252,10 @@
       if (!text || text.trim() === "") continue;
 
       if (role === "system") {
-        // Enforce ignoring giant bloated system prompts (> 1000 chars) from IDE extensions.
-        if (text.length < 500 && !text.includes("You are Cline") && !text.includes("environment_details")) {
-          customSystemNote = text.trim();
-        }
+        customSystemNote = text.trim();
       } else if (role === "user") {
-        // Check if this turn is an automated error message from the client
         const isAutoError = AUTO_ERROR_PATTERNS.some((p) => p.test(text));
         if (!isAutoError) {
-          // Clean environment details if embedded
           const cleanedText = text.replace(/<environment_details>[\s\S]*?<\/environment_details>/gi, "").trim();
           if (cleanedText) {
             conversationTurns.push({ role: "User", text: cleanedText });
@@ -275,10 +270,9 @@
 
     let formattedParts = [];
     if (customSystemNote) {
-      formattedParts.push(`[System Note]: ${customSystemNote}`);
+      formattedParts.push(customSystemNote);
     }
 
-    // If there is only one user turn, pass the user's prompt directly without role headers
     if (conversationTurns.length === 1 && conversationTurns[0].role === "User") {
       formattedParts.push(conversationTurns[0].text);
     } else {
@@ -558,6 +552,83 @@
       );
     }
   }
+
+  let isManualDisconnected = false;
+
+  function renderFloatingWidget() {
+    let container = document.getElementById("w2l-floating-badge");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "w2l-floating-badge";
+      container.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 999999;
+        background: #18181b;
+        color: #e4e4e7;
+        padding: 6px 12px;
+        border-radius: 8px;
+        border: 1px solid #3f3f46;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        user-select: none;
+      `;
+      document.body.appendChild(container);
+    }
+
+    const isConnected = socket && socket.readyState === WebSocket.OPEN && !isManualDisconnected;
+    const statusText = isManualDisconnected ? "🔴 已自主斷線" : (isConnected ? "🟢 已連線" : "🟡 連線中...");
+    const btnText = isManualDisconnected ? "連線" : "斷線";
+    const btnColor = isManualDisconnected ? "#10b981" : "#ef4444";
+
+    container.innerHTML = `
+      <span style="font-weight:600;">⚡ W2L:</span>
+      <span>${statusText}</span>
+      <button id="w2l-toggle-btn" style="
+        background: ${btnColor};
+        color: #fff;
+        border: none;
+        padding: 2px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 500;
+      ">${btnText}</button>
+    `;
+
+    const btn = document.getElementById("w2l-toggle-btn");
+    if (btn) {
+      btn.onclick = () => {
+        if (isManualDisconnected) {
+          isManualDisconnected = false;
+          connectWebSocket(true);
+        } else {
+          isManualDisconnected = true;
+          if (socket) {
+            try { socket.close(); } catch(e) {}
+            socket = null;
+          }
+          renderFloatingWidget();
+        }
+      };
+    }
+  }
+
+  // Hook into notify
+  const origNotify = window.WebChat2LocalBridge.notify;
+  window.WebChat2LocalBridge.notify = function() {
+    origNotify();
+    renderFloatingWidget();
+  };
+
+  setInterval(renderFloatingWidget, 3000);
+  window.addEventListener("DOMContentLoaded", renderFloatingWidget);
+  setTimeout(renderFloatingWidget, 1000);
 
   connectWebSocket();
 })();

@@ -122,6 +122,12 @@ function renderTree(entries, container, basePath) {
         const icon = isDir ? '📁' : getFileIcon(entry.name);
         const fullPath = basePath ? `${basePath}/${entry.name}` : entry.name;
         
+        item.setAttribute('draggable', 'true');
+        item.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', '@' + fullPath);
+            e.dataTransfer.setData('application/w2l-path', fullPath);
+        });
+
         item.innerHTML = `
             <span class="tree-icon">${icon}</span>
             <span class="tree-name">${entry.name}</span>
@@ -415,6 +421,29 @@ function setupAgentChat() {
 
     const sendBtn = document.getElementById('btn-send-agent');
     const promptInput = document.getElementById('chat-prompt-input');
+    const inputWrap = document.querySelector('.chat-input-wrapper');
+
+    if (inputWrap && promptInput) {
+        inputWrap.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            inputWrap.style.borderColor = 'var(--accent)';
+        });
+        inputWrap.addEventListener('dragleave', (e) => {
+            inputWrap.style.borderColor = 'var(--border)';
+        });
+        inputWrap.addEventListener('drop', (e) => {
+            e.preventDefault();
+            inputWrap.style.borderColor = 'var(--border)';
+            const droppedPath = e.dataTransfer.getData('application/w2l-path') || e.dataTransfer.getData('text/plain');
+            if (droppedPath) {
+                const clean = droppedPath.startsWith('@') ? droppedPath : `@${droppedPath}`;
+                promptInput.value = promptInput.value ? `${promptInput.value} ${clean}` : clean;
+                promptInput.focus();
+                const tag = document.getElementById('active-file-tag');
+                if (tag) tag.textContent = `提及: ${clean}`;
+            }
+        });
+    }
 
     if (sendBtn) sendBtn.addEventListener('click', sendAgentMessage);
     if (promptInput) {

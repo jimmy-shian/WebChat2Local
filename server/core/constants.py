@@ -42,11 +42,13 @@ class AgentMode(str, Enum):
 CANONICAL_TOOLS = [
     {
         "name": ToolName.READ_FILE.value,
-        "description": "讀取指定工作區檔案內容與 SHA-256 版本修訂號 (Revision)。",
+        "description": "讀取指定工作區檔案內容與 SHA-256 修訂號。支援選擇查看特定行數範圍。",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "相對於工作區根目錄的檔案路徑"}
+                "path": {"type": "string", "description": "相對於工作區根目錄的檔案路徑"},
+                "start_line": {"type": "integer", "description": "選填。起始行號 (從 1 起算，含此行)。用於大檔案分段檢視。"},
+                "end_line": {"type": "integer", "description": "選填。結束行號 (含此行)。用於大檔案分段檢視。"}
             },
             "required": ["path"]
         }

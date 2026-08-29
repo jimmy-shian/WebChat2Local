@@ -12,6 +12,8 @@ from .tool_executor import ToolExecutor
 from server.providers.provider_adapter import format_tool_prompt, parse_tool_response
 from server.tools.edit_engine import apply_proposal
 
+from .prompt_builder import SystemPromptBuilder
+
 class AgentOrchestrator:
     def __init__(self, dispatch_fn: Optional[Callable] = None, workspace_root: Optional[str] = None):
         self.sessions: Dict[str, Dict[str, Any]] = {}
@@ -20,6 +22,7 @@ class AgentOrchestrator:
         self.workspace_root = workspace_root or os.getenv("W2L_WORKSPACE", os.getcwd())
         self.context_manager = ContextBudgetManager(self.workspace_root)
         self.tool_executor = ToolExecutor(self.workspace_root)
+        self.prompt_builder = SystemPromptBuilder(self.workspace_root)
         
     def create_session(self, mode: AgentMode = AgentMode.AGENT) -> str:
         session_id = str(uuid.uuid4())
@@ -59,10 +62,12 @@ class AgentOrchestrator:
             prompt=prompt
         )
 
-        full_prompt = prompt
-        if ctx.get("files"):
-            file_ctx = "\n".join([f"=== 檔案 {f['path']} ===\n{f['content']}\n" for f in ctx["files"]])
-            full_prompt = f"{file_ctx}\n\n使用者需求: {prompt}"
+        system_prompt = self.prompt_builder.build_system_prompt(active_file=active_file)
+        full_user_prompt = self.prompt_builder.build_full_user_prompt(
+            user_prompt=prompt,
+            active_file=active_file,
+            context_files=ctx.get("files", [])
+        )
 
         # If no dispatch_fn provided (e.g. unit test mode), handle with fallback
         if not self.dispatch_fn:
@@ -77,7 +82,8 @@ class AgentOrchestrator:
             "request_id": request_id,
             "model": model,
             "messages": [
-                {"role": "user", "content": full_prompt}
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": full_user_prompt}
             ],
             "tools": [
                 t for t in CANONICAL_TOOLS if t["name"] in available_tools

@@ -16,7 +16,9 @@ class ToolExecutor:
         try:
             if tool_name == ToolName.READ_FILE.value:
                 path = arguments.get("path", "")
-                res = read_file(self.workspace_root, path)
+                start_line = arguments.get("start_line")
+                end_line = arguments.get("end_line")
+                res = read_file(self.workspace_root, path, start_line, end_line)
                 return {"success": True, "result": res}
 
             elif tool_name == ToolName.CREATE_FILE.value:
