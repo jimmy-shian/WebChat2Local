@@ -412,12 +412,30 @@ body {
 }
 
 .agent-header {
-    height: 42px;
     border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 8px 12px;
+    gap: 6px;
+}
+
+.agent-controls-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 12px;
+    width: 100%;
+    gap: 8px;
+}
+
+.chat-model-select {
+    background: var(--bg-root);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    outline: none;
+    cursor: pointer;
 }
 
 .mode-pills {
@@ -427,6 +445,8 @@ body {
     padding: 3px;
     border-radius: 6px;
     border: 1px solid var(--border);
+    width: 100%;
+    justify-content: space-between;
 }
 
 .mode-pill {
@@ -438,6 +458,8 @@ body {
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
+    flex: 1;
+    text-align: center;
 }
 .mode-pill:hover { color: var(--text-main); }
 .mode-pill.active { background: var(--accent); color: #fff; }
@@ -449,6 +471,7 @@ body {
     font-size: 11px;
     color: var(--text-muted);
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .chat-conversation {

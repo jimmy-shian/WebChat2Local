@@ -28,7 +28,7 @@
                     <span class="prov-pill" id="prov-chatgpt"><span class="dot"></span>ChatGPT</span>
                     <span class="prov-pill" id="prov-gemini"><span class="dot"></span>Gemini</span>
                     <span class="prov-pill" id="prov-deepseek"><span class="dot"></span>DeepSeek</span>
-                    <span class="prov-pill active" id="prov-mcp"><span class="dot online"></span>MCP Server</span>
+                    <span class="prov-pill active" id="prov-mcp" title="本地 FastMCP 伺服器 (STDIO / Streamable HTTP: 8765/mcp) — 供 Cursor, Theia, Claude Desktop 連線 (點擊看指引)" style="cursor: pointer;"><span class="dot online"></span>MCP Server</span>
                 </div>
             </div>
 
@@ -120,11 +120,25 @@
                         <button class="mode-pill" data-mode="CODE">CODE</button>
                         <button class="mode-pill" data-mode="DEBUG">DEBUG</button>
                     </div>
-                    <div class="agent-options">
-                        <label class="autopilot-toggle" title="開啟後安全檔案修改自動批准">
-                            <input type="checkbox" id="chat-autopilot">
-                            <span>Auto-pilot</span>
-                        </label>
+                    <div class="agent-controls-row">
+                        <div class="model-select-wrapper">
+                            <select id="chat-model-select" class="chat-model-select" title="選擇派發之 Web LLM 平台">
+                                <option value="auto">⚡ 智慧派發 (Auto)</option>
+                                <option value="ChatGPT">🟢 ChatGPT Web</option>
+                                <option value="DeepSeek">🔵 DeepSeek Web</option>
+                                <option value="Gemini">🟣 Google Gemini</option>
+                                <option value="gpt-4o">ChatGPT: GPT-4o</option>
+                                <option value="deepseek-chat">DeepSeek: V3 Chat</option>
+                                <option value="deepseek-reasoner">DeepSeek: R1 深度思考</option>
+                                <option value="gemini-2.5-flash">Gemini: 2.5 Flash</option>
+                            </select>
+                        </div>
+                        <div class="agent-options">
+                            <label class="autopilot-toggle" title="開啟後自動批准檔案建立與修改">
+                                <input type="checkbox" id="chat-autopilot" checked>
+                                <span>Auto-pilot</span>
+                            </label>
+                        </div>
                     </div>
                 </div>
 

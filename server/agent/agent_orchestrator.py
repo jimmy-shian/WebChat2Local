@@ -3,12 +3,14 @@ import json
 import asyncio
 import os
 from typing import AsyncGenerator, Dict, Any, Optional, Callable
-from .permission_policy import AgentMode, ToolPermissionPolicy, PermissionLevel
-from .context_manager import ContextBudgetManager
-from server.providers.provider_adapter import format_tool_prompt, parse_tool_response
-from server.tools.edit_engine import (
-    read_file, edit_file, apply_proposal, create_file, delete_file, list_directory, grep_search, compute_hash
+from server.core.constants import (
+    ProviderName, ToolName, EventType, PermissionLevel, AgentMode, CANONICAL_TOOLS
 )
+from .permission_policy import ToolPermissionPolicy
+from .context_manager import ContextBudgetManager
+from .tool_executor import ToolExecutor
+from server.providers.provider_adapter import format_tool_prompt, parse_tool_response
+from server.tools.edit_engine import apply_proposal
 
 class AgentOrchestrator:
     def __init__(self, dispatch_fn: Optional[Callable] = None, workspace_root: Optional[str] = None):
@@ -17,6 +19,7 @@ class AgentOrchestrator:
         self.dispatch_fn = dispatch_fn
         self.workspace_root = workspace_root or os.getenv("W2L_WORKSPACE", os.getcwd())
         self.context_manager = ContextBudgetManager(self.workspace_root)
+        self.tool_executor = ToolExecutor(self.workspace_root)
         
     def create_session(self, mode: AgentMode = AgentMode.AGENT) -> str:
         session_id = str(uuid.uuid4())
@@ -34,12 +37,12 @@ class AgentOrchestrator:
             
     async def run_turn(self, session_id: str, prompt: str, active_file: str = None, model: str = "auto") -> AsyncGenerator[dict, None]:
         if session_id not in self.sessions:
-            yield {"type": "agent.completed", "summary": "Session not found"}
+            yield {"type": EventType.AGENT_COMPLETED.value, "summary": "Session not found"}
             return
             
         session = self.sessions[session_id]
         if session["status"] == "cancelled":
-            yield {"type": "agent.completed", "summary": "Session cancelled"}
+            yield {"type": EventType.AGENT_COMPLETED.value, "summary": "Session cancelled"}
             return
 
         mode = session["mode"]
@@ -51,8 +54,6 @@ class AgentOrchestrator:
 
         available_tools = self.policy.get_available_tools_for_mode(mode)
         
-        # 1. If in ASK mode (pure Q&A, no tools), dispatch directly
-        # 2. Assemble context
         ctx = self.context_manager.assemble_context(
             active_file=active_file,
             prompt=prompt
@@ -65,8 +66,8 @@ class AgentOrchestrator:
 
         # If no dispatch_fn provided (e.g. unit test mode), handle with fallback
         if not self.dispatch_fn:
-            yield {"type": "message.chunk", "delta": f"處理中: {prompt[:30]}"}
-            yield {"type": "agent.completed", "summary": "Turn completed (test mode)"}
+            yield {"type": EventType.MESSAGE_CHUNK.value, "delta": f"處理中: {prompt[:30]}"}
+            yield {"type": EventType.AGENT_COMPLETED.value, "summary": "Turn completed (test mode)"}
             return
 
         # Prepare Web LLM Job
@@ -79,15 +80,15 @@ class AgentOrchestrator:
                 {"role": "user", "content": full_prompt}
             ],
             "tools": [
-                {"name": t, "description": f"Tool {t}", "parameters": {}} for t in available_tools
+                t for t in CANONICAL_TOOLS if t["name"] in available_tools
             ] if available_tools else []
         }
 
         try:
             queue = await self.dispatch_fn(job_data)
         except Exception as e:
-            yield {"type": "message.chunk", "delta": f"\n[連線錯誤] 無法分派至 Web Provider: {str(e)}"}
-            yield {"type": "agent.completed", "summary": f"Dispatch failed: {str(e)}"}
+            yield {"type": EventType.MESSAGE_CHUNK.value, "delta": f"\n[連線錯誤] 無法分派至 Web Provider: {str(e)}"}
+            yield {"type": EventType.AGENT_COMPLETED.value, "summary": f"Dispatch failed: {str(e)}"}
             return
 
         full_response_text = ""
@@ -96,19 +97,19 @@ class AgentOrchestrator:
             try:
                 msg = await asyncio.wait_for(queue.get(), timeout=120.0)
             except asyncio.TimeoutError:
-                yield {"type": "message.chunk", "delta": "\n[超時] Web Provider 未在時間內回傳回應。"}
+                yield {"type": EventType.MESSAGE_CHUNK.value, "delta": "\n[超時] Web Provider 未在時間內回傳回應。"}
                 break
 
             msg_type = msg.get("type")
             if msg_type == "chunk":
                 chunk_text = msg.get("text", "")
                 full_response_text += chunk_text
-                yield {"type": "message.chunk", "delta": chunk_text}
+                yield {"type": EventType.MESSAGE_CHUNK.value, "delta": chunk_text}
             elif msg_type == "done":
                 break
             elif msg_type == "error":
                 err_text = msg.get("error", "Unknown error")
-                yield {"type": "message.chunk", "delta": f"\n[錯誤] {err_text}"}
+                yield {"type": EventType.MESSAGE_CHUNK.value, "delta": f"\n[錯誤] {err_text}"}
                 break
 
         # Parse Tool Response
@@ -125,59 +126,63 @@ class AgentOrchestrator:
 
                     level, reason = self.policy.check_permission(t_name, args, session_id)
                     
-                    if t_name == "create_file":
+                    if t_name in [ToolName.CREATE_FILE.value, ToolName.EDIT_FILE.value]:
                         target_path = args.get("path")
-                        target_content = args.get("content", "")
                         if level == PermissionLevel.AUTO or self.policy.autopilot:
-                            res = create_file(self.workspace_root, target_path, target_content)
-                            yield {"type": "message.chunk", "delta": f"\n\n✅ 已自動建立檔案: `{target_path}`"}
+                            exec_res = await self.tool_executor.execute_tool(t_name, args)
+                            if exec_res.get("success"):
+                                yield {"type": EventType.TOOL_EXECUTED.value, "tool": t_name, "arguments": args, "result": exec_res}
+                                yield {"type": EventType.MESSAGE_CHUNK.value, "delta": f"\n\n✅ 已自動執行 `{t_name}`: `{target_path}`"}
+                            else:
+                                yield {"type": EventType.MESSAGE_CHUNK.value, "delta": f"\n[執行失敗] {exec_res.get('error', '未知錯誤')}"}
                         else:
                             prop_id = str(uuid.uuid4())
                             prop = {
                                 "proposal_id": prop_id,
+                                "tool": t_name,
                                 "path": target_path,
-                                "new_content": target_content,
-                                "diff": f"+ {target_content[:200]}"
+                                "arguments": args,
+                                "new_content": args.get("content", ""),
+                                "diff": args.get("content", "") or f"Edit on {target_path}"
                             }
                             session["pending_proposals"][prop_id] = prop
-                            yield {"type": "edit.proposed", "proposal": prop}
+                            yield {"type": EventType.EDIT_PROPOSED.value, "proposal": prop}
                     
-                    elif t_name == "edit_file":
-                        target_path = args.get("path")
-                        edits = args.get("edits", [])
-                        rev = args.get("revision")
-                        if not rev:
-                            try:
-                                cur_f = read_file(self.workspace_root, target_path)
-                                rev = cur_f["revision"]
-                            except Exception:
-                                rev = "sha256:unknown"
-                        
-                        prop_res = edit_file(self.workspace_root, target_path, rev, edits)
-                        if prop_res.get("success"):
-                            prop_id = prop_res["proposal_id"]
-                            session["pending_proposals"][prop_id] = prop_res
-                            yield {"type": "edit.proposed", "proposal": prop_res}
+                    elif t_name == ToolName.RUN_COMMAND.value:
+                        if level == PermissionLevel.AUTO or self.policy.autopilot:
+                            exec_res = await self.tool_executor.execute_tool(t_name, args)
+                            yield {"type": EventType.TOOL_EXECUTED.value, "tool": t_name, "arguments": args, "result": exec_res}
                         else:
-                            yield {"type": "message.chunk", "delta": f"\n[編輯失敗] {prop_res.get('message', '未知錯誤')}"}
-                    
-                    elif t_name == "run_command":
-                        cmd = args.get("command")
-                        yield {"type": "tool.request", "tool": "run_command", "arguments": args, "permission": level.name}
+                            yield {"type": EventType.TOOL_REQUEST.value, "tool": t_name, "arguments": args, "permission": level.value}
 
-        yield {"type": "agent.completed", "summary": "Turn completed"}
+                    else:
+                        exec_res = await self.tool_executor.execute_tool(t_name, args)
+                        yield {"type": EventType.TOOL_EXECUTED.value, "tool": t_name, "arguments": args, "result": exec_res}
+
+        yield {"type": EventType.AGENT_COMPLETED.value, "summary": "Turn completed"}
         
     def accept_proposal(self, session_id: str, proposal_id: str) -> dict:
         if session_id in self.sessions:
             session = self.sessions[session_id]
             if proposal_id in session["pending_proposals"]:
                 proposal = session["pending_proposals"].pop(proposal_id)
-                # Apply proposal to disk
-                if "base_revision" in proposal and "new_content" in proposal:
-                    return apply_proposal(self.workspace_root, proposal)
-                elif "new_content" in proposal and "path" in proposal:
-                    # Direct create/write
-                    return create_file(self.workspace_root, proposal["path"], proposal["new_content"])
+                t_name = proposal.get("tool", ToolName.EDIT_FILE.value)
+                args = proposal.get("arguments", {})
+                if t_name == ToolName.CREATE_FILE.value:
+                    from server.tools.edit_engine import create_file
+                    return create_file(self.workspace_root, proposal.get("path", args.get("path")), proposal.get("new_content", args.get("content", "")))
+                elif t_name == ToolName.EDIT_FILE.value:
+                    if "base_revision" in proposal and "new_content" in proposal:
+                        return apply_proposal(self.workspace_root, proposal)
+                    else:
+                        from server.tools.edit_engine import edit_file, apply_proposal, read_file
+                        path = proposal.get("path", args.get("path"))
+                        edits = args.get("edits", [])
+                        cur = read_file(self.workspace_root, path)
+                        prop_res = edit_file(self.workspace_root, path, cur["revision"], edits)
+                        if prop_res.get("success"):
+                            return apply_proposal(self.workspace_root, prop_res)
+                        return prop_res
                 return {"success": True, "proposal": proposal}
         return {"success": False, "error": "PROPOSAL_NOT_FOUND"}
         

@@ -450,6 +450,9 @@ async function sendAgentMessage() {
         }
     }
 
+    const modelSelect = document.getElementById('chat-model-select');
+    const selectedModel = modelSelect ? modelSelect.value : 'auto';
+
     const agentMsg = appendChatMessage('agent', '思考中...');
     const msgTextEl = agentMsg.querySelector('.msg-text');
 
@@ -462,12 +465,12 @@ async function sendAgentMessage() {
                 prompt: text,
                 active_file: state.activeFile,
                 mode: state.agentMode,
-                model: 'auto'
+                model: selectedModel
             })
         });
 
         if (!res.ok) {
-            msgTextEl.innerHTML = `<span style="color:var(--red);">[錯誤] 連線失敗 (${res.statusText})。請開啟 ChatGPT / Gemini / DeepSeek 網頁版。</span>`;
+            msgTextEl.innerHTML = `<span style="color:var(--red);">[錯誤] 連線失敗 (${res.statusText})。請確認 Web Provider 已連線。</span>`;
             return;
         }
 
@@ -491,16 +494,23 @@ async function sendAgentMessage() {
                         if (event.type === 'message.chunk') {
                             accumulated += (event.delta || '');
                             msgTextEl.innerHTML = formatMarkdown(accumulated);
+                        } else if (event.type === 'tool.executed') {
+                            appendToolCard('tool_executed', event);
+                            if (event.tool === 'create_file' || event.tool === 'edit_file') {
+                                await loadWorkspaceTree();
+                                const p = event.arguments ? event.arguments.path : null;
+                                if (p) await openFile(p, p.split('/').pop());
+                            }
                         } else if (event.type === 'edit.proposed') {
-                            appendToolCard('edit_file', event.proposal);
+                            appendToolCard(event.proposal.tool || 'edit_file', event.proposal);
                             showDiffReviewBar(event.proposal);
                         } else if (event.type === 'tool.request') {
                             appendToolCard(event.tool, event.arguments);
                         } else if (event.type === 'terminal.output') {
                             appendTerminal(event.stdout || event.stderr || '');
                         } else if (event.type === 'agent.completed') {
-                            if (event.summary && !accumulated) {
-                                msgTextEl.innerHTML = formatMarkdown(event.summary);
+                            if (!accumulated && !msgTextEl.innerHTML) {
+                                msgTextEl.innerHTML = formatMarkdown(event.summary || '已完成。');
                             }
                         }
                     } catch(e) {
@@ -513,8 +523,8 @@ async function sendAgentMessage() {
             }
         }
 
-        if (!msgTextEl.innerHTML) {
-            msgTextEl.innerHTML = formatMarkdown(accumulated || '已收到回應。');
+        if (!msgTextEl.innerHTML && !accumulated) {
+            msgTextEl.innerHTML = formatMarkdown('任務處理完成。');
         }
     } catch(err) {
         msgTextEl.innerHTML = `<span style="color:var(--red);">連線異常: ${err.message}</span>`;
@@ -553,19 +563,28 @@ function appendToolCard(type, data) {
     const card = document.createElement('div');
     card.className = 'tool-card';
     
-    let body = '', actions = '';
+    let header = '🛠️ 工具呼叫', body = '', actions = '';
     const proposalId = data.proposal_id || ('prop_' + Math.random().toString(36).substr(2, 9));
 
-    if (type === 'edit_file' || type === 'write_file') {
-        const path = data.path || data.target || 'file.txt';
-        const diff = data.diff || data.new_content || '';
+    if (type === 'tool_executed') {
+        header = `✅ 工具執行成功: ${data.tool}`;
+        const target = data.arguments ? (data.arguments.path || data.arguments.command) : '';
+        body = `<div>目標: <code>${target}</code></div>`;
+        if (data.arguments && data.arguments.content) {
+            body += `<pre class="code-block" style="max-height:80px; margin-top:4px;">${escapeHtml(data.arguments.content)}</pre>`;
+        }
+    } else if (type === 'create_file' || type === 'edit_file' || type === 'write_file') {
+        header = `📝 檔案修改提案: ${data.path || (data.arguments ? data.arguments.path : 'file')}`;
+        const path = data.path || (data.arguments ? data.arguments.path : 'file.txt');
+        const diff = data.diff || data.new_content || (data.arguments ? data.arguments.content : '');
         body = `<div>檔案: <code>${path}</code></div><pre class="code-block" style="max-height:100px; margin-top:4px;">${escapeHtml(diff)}</pre>`;
         actions = `
             <button class="btn btn-primary btn-sm" onclick="acceptProposal('${proposalId}')">批准套用 ✓</button>
             <button class="btn btn-secondary btn-sm" onclick="rejectProposal('${proposalId}')">捨棄 ✗</button>
         `;
     } else if (type === 'run_command') {
-        const cmd = data.command || '';
+        header = `⚡ 終端命令請求`;
+        const cmd = data.command || (data.arguments ? data.arguments.command : '');
         body = `<div>命令: <code>${cmd}</code></div>`;
         actions = `<button class="btn btn-secondary btn-sm" onclick="runInTerminal('${escapeHtml(cmd)}')">在終端執行 ▶</button>`;
     } else {
@@ -573,9 +592,9 @@ function appendToolCard(type, data) {
     }
 
     card.innerHTML = `
-        <div class="tool-header">🛠️ ${type}</div>
+        <div class="tool-header">${header}</div>
         <div class="tool-body">${body}</div>
-        <div class="tool-actions">${actions}</div>
+        ${actions ? `<div class="tool-actions">${actions}</div>` : ''}
     `;
     conv.appendChild(card);
     conv.scrollTop = conv.scrollHeight;
@@ -650,6 +669,22 @@ function setupModals() {
     };
     bindModal('btn-docs', 'modal-docs');
     bindModal('btn-settings', 'modal-settings');
+
+    const provMcp = document.getElementById('prov-mcp');
+    if (provMcp) {
+        provMcp.addEventListener('click', () => {
+            const docsModal = document.getElementById('modal-docs');
+            if (docsModal) {
+                docsModal.classList.remove('hidden');
+                document.querySelectorAll('.doc-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.doc-pane').forEach(p => p.classList.remove('active'));
+                const mcpTab = document.querySelector('[data-tab="doc-tab-mcp"]');
+                const mcpPane = document.getElementById('doc-tab-mcp');
+                if (mcpTab) mcpTab.classList.add('active');
+                if (mcpPane) mcpPane.classList.add('active');
+            }
+        });
+    }
 
     // Close buttons
     document.querySelectorAll('.btn-close-modal').forEach(btn => {
