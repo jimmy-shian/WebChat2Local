@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# PyInstaller Build & Dist artifacts
+build/
+dist/
+
+# Log files (Zero disk wear principle)
+*.log
+server_out.log
+server_err.log
+
+# Temporary test artifacts
+page_snapshot.png
+
+# Agent & Editor configs
+.agents/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
