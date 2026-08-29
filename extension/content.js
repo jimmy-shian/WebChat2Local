@@ -56,9 +56,13 @@
     retryExhausted: false,
     listeners: [],
     notify: function () {
-      this.listeners.forEach((fn) => {
-        try { fn(this); } catch (e) {}
-      });
+      const self = window.WebChat2LocalBridge || this;
+      if (self && Array.isArray(self.listeners)) {
+        self.listeners.forEach((fn) => {
+          try { fn(self); } catch (e) {}
+        });
+      }
+      try { renderFloatingWidget(); } catch(e) {}
     },
     retry: function () {
       console.log("[WebChat2Local] 手動觸發重新連線...");
@@ -554,6 +558,7 @@
   }
 
   let isManualDisconnected = false;
+  let isPanelExpanded = false;
 
   function renderFloatingWidget() {
     let container = document.getElementById("w2l-floating-badge");
@@ -567,16 +572,17 @@
         z-index: 999999;
         background: #18181b;
         color: #e4e4e7;
-        padding: 6px 12px;
+        padding: 8px 12px;
         border-radius: 8px;
         border: 1px solid #3f3f46;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        box-shadow: 0 6px 16px rgba(0,0,0,0.6);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         font-size: 12px;
         display: flex;
-        align-items: center;
-        gap: 8px;
+        flex-direction: column;
+        gap: 6px;
         user-select: none;
+        max-width: 260px;
       `;
       document.body.appendChild(container);
     }
@@ -585,25 +591,53 @@
     const statusText = isManualDisconnected ? "🔴 已自主斷線" : (isConnected ? "🟢 已連線" : "🟡 連線中...");
     const btnText = isManualDisconnected ? "連線" : "斷線";
     const btnColor = isManualDisconnected ? "#10b981" : "#ef4444";
+    const provName = currentProvider ? currentProvider.name : "未知平台";
+    const userInfo = window.WebChat2LocalBridge.userInfo || { email: "未登入/免費版", plan: "Free" };
+
+    let detailsHtml = "";
+    if (isPanelExpanded) {
+      detailsHtml = `
+        <div style="border-top: 1px solid #3f3f46; padding-top: 6px; font-size: 11px; color: #a1a1aa; display: flex; flex-direction: column; gap: 4px;">
+          <div><b>平台:</b> ${provName}</div>
+          <div><b>用戶:</b> ${userInfo.email || "匿名"}</div>
+          <div><b>方案:</b> ${userInfo.plan || "Free"}</div>
+          <div><b>伺服器:</b> 127.0.0.1:8765</div>
+        </div>
+      `;
+    }
 
     container.innerHTML = `
-      <span style="font-weight:600;">⚡ W2L:</span>
-      <span>${statusText}</span>
-      <button id="w2l-toggle-btn" style="
-        background: ${btnColor};
-        color: #fff;
-        border: none;
-        padding: 2px 8px;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 11px;
-        font-weight: 500;
-      ">${btnText}</button>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <span style="font-weight:600; color:#38bdf8;">⚡ W2L</span>
+        <span>${statusText}</span>
+        <div style="display:flex; gap:4px;">
+          <button id="w2l-toggle-btn" style="
+            background: ${btnColor};
+            color: #fff;
+            border: none;
+            padding: 2px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+          ">${btnText}</button>
+          <button id="w2l-expand-btn" style="
+            background: #27272a;
+            color: #d4d4d8;
+            border: 1px solid #3f3f46;
+            padding: 2px 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 10px;
+          ">${isPanelExpanded ? "▲" : "▼"}</button>
+        </div>
+      </div>
+      ${detailsHtml}
     `;
 
-    const btn = document.getElementById("w2l-toggle-btn");
-    if (btn) {
-      btn.onclick = () => {
+    const toggleBtn = document.getElementById("w2l-toggle-btn");
+    if (toggleBtn) {
+      toggleBtn.onclick = () => {
         if (isManualDisconnected) {
           isManualDisconnected = false;
           connectWebSocket(true);
@@ -617,14 +651,15 @@
         }
       };
     }
-  }
 
-  // Hook into notify
-  const origNotify = window.WebChat2LocalBridge.notify;
-  window.WebChat2LocalBridge.notify = function() {
-    origNotify();
-    renderFloatingWidget();
-  };
+    const expandBtn = document.getElementById("w2l-expand-btn");
+    if (expandBtn) {
+      expandBtn.onclick = () => {
+        isPanelExpanded = !isPanelExpanded;
+        renderFloatingWidget();
+      };
+    }
+  }
 
   setInterval(renderFloatingWidget, 3000);
   window.addEventListener("DOMContentLoaded", renderFloatingWidget);
