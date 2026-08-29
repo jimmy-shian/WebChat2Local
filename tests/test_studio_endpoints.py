@@ -85,3 +85,24 @@ def test_agent_chat():
     content = response.text
     assert "event: message.chunk" in content
     assert "event: agent.completed" in content
+
+def test_workspace_file_create_save_delete():
+    # 1. Create file
+    res_create = client.post("/api/workspace/file/create", json={"path": "temp_test_file.txt", "content": "initial"})
+    assert res_create.status_code == 200
+    assert res_create.json()["success"] is True
+
+    # 2. Save/Update file
+    res_save = client.post("/api/workspace/file/save", json={"path": "temp_test_file.txt", "content": "updated content"})
+    assert res_save.status_code == 200
+    assert res_save.json()["success"] is True
+
+    # 3. Read file
+    res_read = client.get("/api/workspace/file?path=temp_test_file.txt")
+    assert res_read.status_code == 200
+    assert res_read.json()["content"] == "updated content"
+
+    # 4. Delete file
+    res_del = client.post("/api/workspace/file/delete", json={"path": "temp_test_file.txt"})
+    assert res_del.status_code == 200
+    assert res_del.json()["success"] is True

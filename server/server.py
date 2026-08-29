@@ -571,12 +571,24 @@ class AgentChatRequest(BaseModel):
     mode: Optional[str] = "ASK"
     model: Optional[str] = "auto"
 
+class FileSaveRequest(BaseModel):
+    path: str
+    content: str
+
+class FileCreateRequest(BaseModel):
+    path: str
+    content: Optional[str] = ""
+
+class FileDeleteRequest(BaseModel):
+    path: str
+    revision: Optional[str] = None
+
 # Store sessions and proposals in memory
 SESSIONS = {}
 PROPOSALS = {}
 
 from server.agent.agent_orchestrator import AgentOrchestrator
-orchestrator = AgentOrchestrator()
+orchestrator = AgentOrchestrator(dispatch_fn=manager.dispatch_job)
 
 @app.get("/api/providers")
 async def get_providers():
@@ -600,7 +612,7 @@ async def get_provider_health(provider_name: str):
 
 @app.post("/api/sessions")
 async def create_session(session: SessionCreate):
-    session_id = orchestrator.create_session()
+    session_id = orchestrator.create_session(mode=session.mode)
     SESSIONS[session_id] = {"mode": session.mode}
     return {"session_id": session_id, "mode": session.mode}
 
@@ -614,11 +626,16 @@ async def cancel_session(session_id: str):
 
 @app.post("/api/proposals/{proposal_id}/accept")
 async def accept_proposal_endpoint(proposal_id: str):
+    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    # Check all active sessions in orchestrator
+    for s_id in list(orchestrator.sessions.keys()):
+        res = orchestrator.accept_proposal(s_id, proposal_id)
+        if res.get("success"):
+            return res
     if proposal_id in PROPOSALS:
         prop = PROPOSALS[proposal_id]
         prop["status"] = "accepted"
         if "base_revision" in prop and "new_content" in prop:
-            workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
             from server.tools.edit_engine import apply_proposal
             res = apply_proposal(workspace, prop)
             return res
@@ -627,6 +644,10 @@ async def accept_proposal_endpoint(proposal_id: str):
 
 @app.post("/api/proposals/{proposal_id}/reject")
 async def reject_proposal_endpoint(proposal_id: str):
+    for s_id in list(orchestrator.sessions.keys()):
+        res = orchestrator.reject_proposal(s_id, proposal_id)
+        if res.get("success"):
+            return res
     if proposal_id in PROPOSALS:
         PROPOSALS[proposal_id]["status"] = "rejected"
         return {"status": "rejected", "proposal_id": proposal_id}
@@ -643,6 +664,39 @@ async def get_workspace_tree(path: Optional[str] = "."):
 async def get_workspace_file(path: str):
     workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
     return read_file(workspace, path)
+
+@app.post("/api/workspace/file/save")
+async def save_workspace_file(req: FileSaveRequest):
+    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    from server.tools.workspace_security import WorkspaceSecurityPolicy
+    policy = WorkspaceSecurityPolicy(workspace)
+    full_path = policy.validate_path(req.path)
+    with open(full_path, "wb") as f:
+        f.write(req.content.encode("utf-8"))
+    from server.tools.edit_engine import compute_hash
+    rev = compute_hash(req.content.encode("utf-8"))
+    return {"success": True, "path": req.path, "revision": rev}
+
+@app.post("/api/workspace/file/create")
+async def create_workspace_file_endpoint(req: FileCreateRequest):
+    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    from server.tools.edit_engine import create_file
+    res = create_file(workspace, req.path, req.content or "")
+    return res
+
+@app.post("/api/workspace/file/delete")
+async def delete_workspace_file_endpoint(req: FileDeleteRequest):
+    workspace = os.getenv("W2L_WORKSPACE", os.path.dirname(os.path.dirname(__file__)))
+    from server.tools.edit_engine import delete_file, read_file
+    rev = req.revision
+    if not rev:
+        try:
+            f = read_file(workspace, req.path)
+            rev = f["revision"]
+        except Exception:
+            rev = ""
+    res = delete_file(workspace, req.path, rev)
+    return res
 
 @app.post("/api/workspace/edit")
 async def edit_workspace_file(req: EditProposalRequest):

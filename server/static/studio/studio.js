@@ -60,6 +60,11 @@ function initMonaco() {
                     }
                 }
             });
+
+            // Add Ctrl+S save keybinding
+            state.editorInstance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                saveActiveFile();
+            });
         }
     }
 
@@ -251,6 +256,60 @@ function closeFile(path) {
     }
     renderTabs();
 }
+
+async function saveActiveFile() {
+    if (!state.activeFile) {
+        alert('請先在左側檔案樹選擇或新增檔案！');
+        return;
+    }
+    const content = state.editorInstance ? state.editorInstance.getValue() : (document.getElementById('basic-textarea')?.value || '');
+    try {
+        const res = await fetch('/api/workspace/file/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: state.activeFile, content: content })
+        });
+        const data = await res.json();
+        if (data.success) {
+            const file = state.openFiles.find(f => f.path === state.activeFile);
+            if (file) {
+                file.isDirty = false;
+                file.revision = data.revision;
+                renderTabs();
+            }
+            appendTerminal(`[檔案已儲存] ${state.activeFile} (Revision: ${data.revision ? data.revision.slice(0, 16) : ''}...)`, 'sys');
+        } else {
+            alert('儲存失敗: ' + (data.error || '未知錯誤'));
+        }
+    } catch(e) {
+        alert('儲存失敗: ' + e.message);
+    }
+}
+window.saveActiveFile = saveActiveFile;
+
+async function createNewFile() {
+    const filename = prompt('請輸入新檔案名稱 (例如: src/index.js 或 demo.py):');
+    if (!filename || !filename.trim()) return;
+    const cleanPath = filename.trim();
+    try {
+        const res = await fetch('/api/workspace/file/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: cleanPath, content: '' })
+        });
+        const data = await res.json();
+        if (data.success) {
+            await loadWorkspaceTree();
+            await openFile(cleanPath, cleanPath.split('/').pop());
+            appendTerminal(`[檔案已建立] ${cleanPath}`, 'sys');
+        } else {
+            alert('建立失敗: ' + (data.error || '檔案可能已存在'));
+        }
+    } catch(e) {
+        alert('建立失敗: ' + e.message);
+    }
+}
+window.createNewFile = createNewFile;
 
 // --- Terminal Console ---
 function setupTerminal() {
@@ -662,4 +721,18 @@ window.addEventListener('DOMContentLoaded', () => {
 
     const refreshTreeBtn = document.getElementById('btn-refresh-tree');
     if (refreshTreeBtn) refreshTreeBtn.addEventListener('click', () => loadWorkspaceTree());
+
+    const newFileBtn = document.getElementById('btn-new-file');
+    if (newFileBtn) newFileBtn.addEventListener('click', createNewFile);
+
+    const saveFileBtn = document.getElementById('btn-save-file');
+    if (saveFileBtn) saveFileBtn.addEventListener('click', saveActiveFile);
+
+    // Global Ctrl+S keybinding
+    window.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+            e.preventDefault();
+            saveActiveFile();
+        }
+    });
 });

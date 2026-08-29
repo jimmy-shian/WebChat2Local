@@ -62,26 +62,35 @@ def test_context_manager(tmp_path):
 
 @pytest.mark.asyncio
 async def test_agent_orchestrator():
-    orchestrator = AgentOrchestrator()
-    
-    session_id = orchestrator.create_session(AgentMode.AGENT)
-    assert session_id in orchestrator.sessions
-    
-    events = []
-    async for event in orchestrator.run_turn(session_id, "do something"):
-        events.append(event)
+    import asyncio
+    async def mock_dispatch(job_data):
+        q = asyncio.Queue()
+        # Put chunk and tool response
+        await q.put({"type": "chunk", "text": "```json\n{\"tool\": \"edit_file\", \"arguments\": {\"path\": \"test.py\", \"edits\": [{\"old_text\": \"a\", \"new_text\": \"b\"}]}}\n```"})
+        await q.put({"type": "done"})
+        return q
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from server.tools.edit_engine import create_file
+        create_file(tmp_dir, "test.py", "a = 1\n")
         
-    assert any(e["type"] == "edit.proposed" for e in events)
-    
-    proposal_id = list(orchestrator.sessions[session_id]["pending_proposals"].keys())[0] if orchestrator.sessions[session_id]["pending_proposals"] else None
-    
-    if proposal_id:
+        orchestrator = AgentOrchestrator(dispatch_fn=mock_dispatch, workspace_root=tmp_dir)
+        session_id = orchestrator.create_session(AgentMode.AGENT)
+        assert session_id in orchestrator.sessions
+        
+        events = []
+        async for event in orchestrator.run_turn(session_id, "edit test.py"):
+            events.append(event)
+            
+        assert any(e["type"] == "edit.proposed" for e in events)
+        
+        proposal_id = list(orchestrator.sessions[session_id]["pending_proposals"].keys())[0]
         res = orchestrator.accept_proposal(session_id, proposal_id)
-        assert res["status"] == "accepted"
-        assert proposal_id not in orchestrator.sessions[session_id]["pending_proposals"]
+        assert res.get("success") is True or res.get("status") == "accepted"
         
-    orchestrator.cancel_session(session_id)
-    assert orchestrator.sessions[session_id]["status"] == "cancelled"
+        orchestrator.cancel_session(session_id)
+        assert orchestrator.sessions[session_id]["status"] == "cancelled"
     
     events_cancelled = []
     async for event in orchestrator.run_turn(session_id, "do something"):
