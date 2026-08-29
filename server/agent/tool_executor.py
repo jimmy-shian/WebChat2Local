@@ -11,18 +11,29 @@ class ToolExecutor:
     def __init__(self, workspace_root: str):
         self.workspace_root = workspace_root
 
+    def normalize_path(self, path: str) -> str:
+        if not path:
+            return ""
+        p = path.replace("\\", "/").strip()
+        ws = os.path.abspath(self.workspace_root).replace("\\", "/").rstrip("/")
+        if p.startswith(ws):
+            p = p[len(ws):].lstrip("/")
+        elif ":" in p and "/" in p:
+            p = p.split("/")[-1]
+        return p
+
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Executes a canonical tool and returns structured result."""
         try:
             if tool_name == ToolName.READ_FILE.value:
-                path = arguments.get("path", "")
+                path = self.normalize_path(arguments.get("path", ""))
                 start_line = arguments.get("start_line")
                 end_line = arguments.get("end_line")
                 res = read_file(self.workspace_root, path, start_line, end_line)
                 return {"success": True, "result": res}
 
             elif tool_name == ToolName.CREATE_FILE.value:
-                path = arguments.get("path", "")
+                path = self.normalize_path(arguments.get("path", ""))
                 content = arguments.get("content", "")
                 res = create_file(self.workspace_root, path, content)
                 return res
