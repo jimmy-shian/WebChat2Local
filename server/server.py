@@ -547,7 +547,7 @@ from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 import os
 from server.tools.edit_engine import list_directory, read_file
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, Response
 
 # We will serve static files from server/static
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
@@ -707,6 +707,24 @@ async def agent_chat_endpoint(req: AgentChatRequest):
 async def serve_studio():
     static_dir = os.path.join(os.path.dirname(__file__), "static", "studio")
     return FileResponse(os.path.join(static_dir, "index.html"))
+
+@app.get("/studio.css")
+async def serve_studio_css():
+    static_file = os.path.join(os.path.dirname(__file__), "static", "studio", "studio.css")
+    if os.path.exists(static_file):
+        return FileResponse(static_file, media_type="text/css")
+    raise HTTPException(status_code=404, detail="studio.css not found")
+
+@app.get("/studio.js")
+async def serve_studio_js():
+    static_file = os.path.join(os.path.dirname(__file__), "static", "studio", "studio.js")
+    if os.path.exists(static_file):
+        return FileResponse(static_file, media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="studio.js not found")
+
+@app.get("/favicon.ico")
+async def serve_favicon():
+    return Response(status_code=204)
 
 @app.get("/", response_class=HTMLResponse)
 async def serve_dashboard():

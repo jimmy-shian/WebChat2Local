@@ -1,114 +1,58 @@
-// WebChat2Local Studio - Core Client Controller
+// WebChat2Local Studio v4.2 - Core Client Controller
 
 const state = {
-    workspacePath: '',
-    openFiles: [], // { name, path, content, isDirty }
+    workspacePath: 'WebChat2Local',
+    openFiles: [], // { name, path, content, revision, isDirty, model }
     activeFile: null,
     editorInstance: null,
     diffEditorInstance: null,
     agentMode: 'AGENT',
     chatHistory: [],
     sessionId: null,
-    isDiffMode: false
+    pendingProposal: null,
+    cmdHistory: [],
+    cmdHistoryIndex: -1
 };
 
-// --- DOM Elements ---
-const fileTreeEl = document.getElementById('file-tree');
-const editorTabsEl = document.getElementById('editor-tabs');
-const editorContainer = document.getElementById('editor-container');
-const fallbackEditor = document.getElementById('fallback-editor');
-const basicTextarea = document.getElementById('basic-textarea');
-const terminalOutput = document.getElementById('terminal-output');
-const terminalInput = document.getElementById('terminal-input');
-const chatHistoryEl = document.getElementById('chat-history');
-const chatInput = document.getElementById('chat-input');
-const chatModeBtns = document.querySelectorAll('.mode-btn');
-
-// --- Modals Setup ---
-const setupModals = () => {
-    const bindModal = (btnId, modalId) => {
-        const btn = document.getElementById(btnId);
-        const modal = document.getElementById(modalId);
-        if (btn && modal) {
-            btn.addEventListener('click', () => {
-                modal.classList.remove('hidden');
-                if (btnId === 'btn-settings') refreshProviderStatus();
-            });
-        }
-    };
-    bindModal('btn-docs', 'modal-docs');
-    bindModal('btn-settings', 'modal-settings');
-
-    document.querySelectorAll('.btn-close-modal').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            e.target.closest('.modal').classList.add('hidden');
-        });
-    });
-
-    document.querySelectorAll('.modal').forEach(m => {
-        m.addEventListener('click', (e) => {
-            if (e.target === m) m.classList.add('hidden');
-        });
-    });
-
-    // Tab switcher in Docs modal
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const tabs = e.target.closest('.tabs');
-            const targetId = e.target.dataset.tab;
-            tabs.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            e.target.classList.add('active');
-            
-            const modalBody = e.target.closest('.modal-body');
-            modalBody.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
-            const targetContent = document.getElementById(targetId);
-            if (targetContent) targetContent.classList.add('active');
-        });
-    });
-};
-
-// --- Provider Status in Settings ---
-async function refreshProviderStatus() {
-    try {
-        const res = await fetch('/api/providers');
-        const data = await res.json();
-        const container = document.querySelector('.provider-status');
-        if (!container) return;
-        container.innerHTML = '';
-        const providers = data.providers || [];
-        if (providers.length === 0) {
-            container.innerHTML = '<span class="badge disconnected">無在線 Provider（請開啟 ChatGPT / Gemini / DeepSeek 網頁版）</span>';
-            return;
-        }
-        providers.forEach(p => {
-            const badge = document.createElement('span');
-            badge.className = `badge ${p.active ? 'connected' : 'disconnected'}`;
-            badge.textContent = `${p.name}: ${p.active ? '🟢 連線中' : '🔴 離線'}`;
-            container.appendChild(badge);
-        });
-    } catch(e) {
-        console.warn('Failed to fetch providers', e);
-    }
+// --- Helper Functions ---
+function escapeHtml(text) {
+    if (!text) return '';
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function copyCode(elementId) {
+    const el = document.getElementById(elementId);
+    if (!el) return;
+    navigator.clipboard.writeText(el.innerText || el.textContent).then(() => {
+        alert('設定範例已複製到剪貼簿！');
+    }).catch(err => {
+        console.error('Copy failed:', err);
+    });
+}
+window.copyCode = copyCode;
+
 // --- Monaco Editor Initialization ---
-const initEditor = () => {
-    function createMonaco() {
-        if (window.monaco) {
-            state.editorInstance = monaco.editor.create(editorContainer, {
-                value: "// 歡迎使用 WebChat2Local Studio\n// 點擊左側檔案即可開啟編輯，或在右側向 AI Agent 下達指令。\n",
+function initMonaco() {
+    const container = document.getElementById('monaco-editor-container');
+    const fallback = document.getElementById('fallback-editor');
+    const textarea = document.getElementById('basic-textarea');
+
+    function createEditor() {
+        if (window.monaco && container) {
+            state.editorInstance = monaco.editor.create(container, {
+                value: "// 歡迎使用 WebChat2Local Studio (v4.2)\n// 點擊左側檔案開啟代碼，或於右側向 AI Agent 下達需求。\n",
                 language: "javascript",
                 theme: "vs-dark",
-                automaticLayout: true,
                 fontSize: 13,
+                automaticLayout: true,
                 minimap: { enabled: false },
                 scrollBeyondLastLine: false,
                 renderWhitespace: "selection"
             });
-            
+
             state.editorInstance.onDidChangeModelContent(() => {
                 if (state.activeFile) {
-                    const f = state.openFiles.find(f => f.path === state.activeFile);
+                    const f = state.openFiles.find(item => item.path === state.activeFile);
                     if (f && f.content !== state.editorInstance.getValue()) {
                         f.isDirty = true;
                         f.content = state.editorInstance.getValue();
@@ -121,42 +65,45 @@ const initEditor = () => {
 
     if (window.require && typeof window.require === 'function') {
         window.require(['vs/editor/editor.main'], function () {
-            createMonaco();
+            createEditor();
         });
     } else if (window.monaco) {
-        createMonaco();
+        createEditor();
     } else {
-        editorContainer.style.display = 'none';
-        fallbackEditor.style.display = 'block';
-        basicTextarea.addEventListener('input', () => {
-            if (state.activeFile) {
-                const f = state.openFiles.find(f => f.path === state.activeFile);
-                if (f && f.content !== basicTextarea.value) {
-                    f.isDirty = true;
-                    f.content = basicTextarea.value;
-                    renderTabs();
+        if (container) container.style.display = 'none';
+        if (fallback) fallback.style.display = 'block';
+        if (textarea) {
+            textarea.addEventListener('input', () => {
+                if (state.activeFile) {
+                    const f = state.openFiles.find(item => item.path === state.activeFile);
+                    if (f) {
+                        f.isDirty = true;
+                        f.content = textarea.value;
+                        renderTabs();
+                    }
                 }
-            }
-        });
+            });
+        }
     }
-};
+}
 
-// --- Workspace Tree ---
-const loadWorkspaceTree = async (path = '.') => {
+// --- Workspace File Tree ---
+async function loadWorkspaceTree(path = '.') {
+    const container = document.getElementById('file-tree');
+    if (!container) return;
     try {
         const res = await fetch(`/api/workspace/tree?path=${encodeURIComponent(path)}`);
-        if (!res.ok) throw new Error('API Error');
         const data = await res.json();
-        renderTree(data.entries || [], fileTreeEl, path === '.' ? '' : path);
+        renderTree(data.entries || [], container, path === '.' ? '' : path);
     } catch (e) {
-        console.warn('Workspace tree fetch failed:', e);
+        console.error('Failed to load workspace tree', e);
     }
-};
+}
 
-const renderTree = (entries, container, basePath) => {
+function renderTree(entries, container, basePath) {
     container.innerHTML = '';
     
-    // Sort directories first, then files alphabetically
+    // Sort directories first
     const sorted = [...entries].sort((a, b) => {
         if (a.type === b.type) return a.name.localeCompare(b.name);
         return a.type === 'directory' ? -1 : 1;
@@ -181,7 +128,6 @@ const renderTree = (entries, container, basePath) => {
             item.classList.add('active');
             
             if (isDir) {
-                // Toggle expand or load subdirectory
                 let childContainer = item.nextElementSibling;
                 if (childContainer && childContainer.classList.contains('tree-children')) {
                     childContainer.remove();
@@ -190,7 +136,7 @@ const renderTree = (entries, container, basePath) => {
                     const subData = await subRes.json();
                     childContainer = document.createElement('div');
                     childContainer.className = 'tree-children';
-                    childContainer.style.paddingLeft = '14px';
+                    childContainer.style.paddingLeft = '12px';
                     renderTree(subData.entries || [], childContainer, fullPath);
                     item.after(childContainer);
                 }
@@ -200,7 +146,7 @@ const renderTree = (entries, container, basePath) => {
         });
         container.appendChild(item);
     });
-};
+}
 
 function getFileIcon(filename) {
     if (filename.endsWith('.py')) return '🐍';
@@ -218,8 +164,8 @@ function formatBytes(bytes) {
     return `${(bytes / 1024).toFixed(1)}K`;
 }
 
-// --- Editor Tabs & File Handling ---
-const openFile = async (path, name) => {
+// --- Tabs & Editor Handling ---
+async function openFile(path, name) {
     let file = state.openFiles.find(f => f.path === path);
     if (!file) {
         try {
@@ -229,19 +175,23 @@ const openFile = async (path, name) => {
                 path,
                 name,
                 content: data.content || '',
-                revision: data.revision,
+                revision: data.revision || '',
                 isDirty: false
             };
             state.openFiles.push(file);
         } catch (e) {
-            console.error('Failed to load file content', e);
-            file = { path, name, content: `// Error reading ${name}`, isDirty: false };
+            console.error('Failed to load file', e);
+            file = { path, name, content: `// Error loading ${name}`, isDirty: false };
             state.openFiles.push(file);
         }
     }
     state.activeFile = path;
     
-    // Set Editor content & syntax
+    // Update Active File context badge
+    const activeFileTag = document.getElementById('active-file-tag');
+    if (activeFileTag) activeFileTag.textContent = `當前分頁: ${name}`;
+
+    // Set Monaco Content
     if (state.editorInstance && window.monaco) {
         const ext = name.split('.').pop().toLowerCase();
         const langMap = {
@@ -252,13 +202,22 @@ const openFile = async (path, name) => {
         const model = monaco.editor.createModel(file.content, lang);
         state.editorInstance.setModel(model);
     } else {
-        basicTextarea.value = file.content;
+        const textarea = document.getElementById('basic-textarea');
+        if (textarea) textarea.value = file.content;
     }
     renderTabs();
-};
+}
 
-const renderTabs = () => {
-    editorTabsEl.innerHTML = '';
+function renderTabs() {
+    const tabsBar = document.getElementById('editor-tabs');
+    if (!tabsBar) return;
+    tabsBar.innerHTML = '';
+    
+    if (state.openFiles.length === 0) {
+        tabsBar.innerHTML = '<div class="tab-placeholder">尚無開啟檔案</div>';
+        return;
+    }
+
     state.openFiles.forEach(file => {
         const tab = document.createElement('div');
         tab.className = `tab ${file.path === state.activeFile ? 'active' : ''} ${file.isDirty ? 'dirty' : ''}`;
@@ -273,11 +232,11 @@ const renderTabs = () => {
                 openFile(file.path, file.name);
             }
         });
-        editorTabsEl.appendChild(tab);
+        tabsBar.appendChild(tab);
     });
-};
+}
 
-const closeFile = (path) => {
+function closeFile(path) {
     state.openFiles = state.openFiles.filter(f => f.path !== path);
     if (state.activeFile === path) {
         state.activeFile = state.openFiles.length ? state.openFiles[0].path : null;
@@ -286,21 +245,26 @@ const closeFile = (path) => {
             openFile(next.path, next.name);
         } else if (state.editorInstance) {
             state.editorInstance.setValue('');
-        } else {
-            basicTextarea.value = '';
+            const activeFileTag = document.getElementById('active-file-tag');
+            if (activeFileTag) activeFileTag.textContent = '未選取檔案';
         }
     }
     renderTabs();
-};
+}
 
-// --- Terminal Execution ---
-const setupTerminal = () => {
-    if (!terminalInput) return;
-    terminalInput.addEventListener('keydown', async (e) => {
+// --- Terminal Console ---
+function setupTerminal() {
+    const input = document.getElementById('terminal-input');
+    const clearBtn = document.getElementById('btn-term-clear');
+    if (!input) return;
+
+    input.addEventListener('keydown', async (e) => {
         if (e.key === 'Enter') {
-            const cmd = terminalInput.value.trim();
+            const cmd = input.value.trim();
             if (!cmd) return;
-            terminalInput.value = '';
+            state.cmdHistory.push(cmd);
+            state.cmdHistoryIndex = state.cmdHistory.length;
+            input.value = '';
             appendTerminal(`PS> ${cmd}`, 'user');
             
             try {
@@ -313,61 +277,78 @@ const setupTerminal = () => {
                 if (data.stdout) appendTerminal(data.stdout, 'output');
                 if (data.stderr) appendTerminal(data.stderr, 'error');
                 if (data.exit_code !== 0 && data.exit_code !== undefined) {
-                    appendTerminal(`[Process exited with code ${data.exit_code}]`, 'error');
+                    appendTerminal(`[處理程序結束，Exit Code: ${data.exit_code}]`, 'error');
                 }
             } catch (err) {
-                appendTerminal(`Execution failed: ${err.message}`, 'error');
+                appendTerminal(`執行失敗: ${err.message}`, 'error');
+            }
+        } else if (e.key === 'ArrowUp') {
+            if (state.cmdHistoryIndex > 0) {
+                state.cmdHistoryIndex--;
+                input.value = state.cmdHistory[state.cmdHistoryIndex] || '';
+            }
+        } else if (e.key === 'ArrowDown') {
+            if (state.cmdHistoryIndex < state.cmdHistory.length - 1) {
+                state.cmdHistoryIndex++;
+                input.value = state.cmdHistory[state.cmdHistoryIndex] || '';
+            } else {
+                state.cmdHistoryIndex = state.cmdHistory.length;
+                input.value = '';
             }
         }
     });
 
-    const clearBtn = document.getElementById('btn-term-clear');
     if (clearBtn) {
         clearBtn.addEventListener('click', () => {
-            terminalOutput.innerHTML = '<div class="term-line welcome">WebChat2Local Studio Terminal Initialized.</div>';
+            const out = document.getElementById('terminal-output');
+            if (out) out.innerHTML = '<div class="term-line sys">WebChat2Local Studio Terminal Cleared.</div>';
         });
     }
-};
+}
 
-const appendTerminal = (text, type = 'output') => {
-    if (!terminalOutput) return;
+function appendTerminal(text, type = 'output') {
+    const out = document.getElementById('terminal-output');
+    if (!out) return;
     const line = document.createElement('div');
     line.className = `term-line ${type}`;
     line.textContent = text;
-    terminalOutput.appendChild(line);
-    terminalOutput.scrollTop = terminalOutput.scrollHeight;
-};
+    out.appendChild(line);
+    out.scrollTop = out.scrollHeight;
+}
 
-// --- Agent Chat & Multi-turn Execution ---
-const setupChat = () => {
-    chatModeBtns.forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            chatModeBtns.forEach(b => b.classList.remove('active'));
+// --- Agent Chat & SSE Streaming ---
+function setupAgentChat() {
+    document.querySelectorAll('.mode-pill').forEach(pill => {
+        pill.addEventListener('click', (e) => {
+            document.querySelectorAll('.mode-pill').forEach(p => p.classList.remove('active'));
             e.target.classList.add('active');
             state.agentMode = e.target.dataset.mode;
         });
     });
 
-    const sendBtn = document.getElementById('btn-send-chat');
-    if (sendBtn) sendBtn.addEventListener('click', sendChat);
+    const sendBtn = document.getElementById('btn-send-agent');
+    const promptInput = document.getElementById('chat-prompt-input');
 
-    if (chatInput) {
-        chatInput.addEventListener('keydown', (e) => {
+    if (sendBtn) sendBtn.addEventListener('click', sendAgentMessage);
+    if (promptInput) {
+        promptInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                sendChat();
+                sendAgentMessage();
             }
         });
     }
-};
+}
 
-const sendChat = async () => {
-    const text = chatInput.value.trim();
+async function sendAgentMessage() {
+    const promptInput = document.getElementById('chat-prompt-input');
+    const text = promptInput.value.trim();
     if (!text) return;
-    chatInput.value = '';
-    appendChat(text, 'user');
+    promptInput.value = '';
     
-    // Create session if not present
+    appendChatMessage('user', text);
+    
+    // Ensure session
     if (!state.sessionId) {
         try {
             const sRes = await fetch('/api/sessions', {
@@ -378,12 +359,12 @@ const sendChat = async () => {
             const sData = await sRes.json();
             state.sessionId = sData.session_id;
         } catch(e) {
-            console.error('Session creation failed', e);
+            console.error('Failed to create session', e);
         }
     }
 
-    const agentMsg = appendChat('思考中...', 'agent');
-    const msgContent = agentMsg.querySelector('.msg-content');
+    const agentMsg = appendChatMessage('agent', '思考中...');
+    const msgTextEl = agentMsg.querySelector('.msg-text');
 
     try {
         const res = await fetch('/api/agent/chat', {
@@ -399,14 +380,14 @@ const sendChat = async () => {
         });
 
         if (!res.ok) {
-            msgContent.textContent = `[錯誤: ${res.statusText}] 請確認 ChatGPT / Gemini / DeepSeek 網頁版已開啟並連線。`;
+            msgTextEl.innerHTML = `<span style="color:var(--red);">[錯誤] 連線失敗 (${res.statusText})。請開啟 ChatGPT / Gemini / DeepSeek 網頁版。</span>`;
             return;
         }
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let accumulated = '';
-        msgContent.textContent = '';
+        msgTextEl.innerHTML = '';
 
         while (true) {
             const { done, value } = await reader.read();
@@ -422,67 +403,86 @@ const sendChat = async () => {
                         const event = JSON.parse(dataStr);
                         if (event.type === 'message.chunk') {
                             accumulated += (event.delta || '');
-                            msgContent.textContent = accumulated;
+                            msgTextEl.innerHTML = formatMarkdown(accumulated);
                         } else if (event.type === 'edit.proposed') {
                             appendToolCard('edit_file', event.proposal);
+                            showDiffReviewBar(event.proposal);
                         } else if (event.type === 'tool.request') {
                             appendToolCard(event.tool, event.arguments);
                         } else if (event.type === 'terminal.output') {
                             appendTerminal(event.stdout || event.stderr || '');
                         } else if (event.type === 'agent.completed') {
                             if (event.summary && !accumulated) {
-                                msgContent.textContent = event.summary;
+                                msgTextEl.innerHTML = formatMarkdown(event.summary);
                             }
                         }
-                    } catch (e) {
-                        // plain text chunk fallback
+                    } catch(e) {
                         if (dataStr) {
                             accumulated += dataStr;
-                            msgContent.textContent = accumulated;
+                            msgTextEl.innerHTML = formatMarkdown(accumulated);
                         }
                     }
                 }
             }
         }
 
-        if (!msgContent.textContent) {
-            msgContent.textContent = accumulated || '已收到回應。';
+        if (!msgTextEl.innerHTML) {
+            msgTextEl.innerHTML = formatMarkdown(accumulated || '已收到回應。');
         }
     } catch(err) {
-        msgContent.textContent = `連線錯誤: ${err.message}`;
+        msgTextEl.innerHTML = `<span style="color:var(--red);">連線異常: ${err.message}</span>`;
     }
-};
+}
 
-const appendChat = (text, role) => {
+function appendChatMessage(role, text) {
+    const conv = document.getElementById('chat-conversation');
+    if (!conv) return;
     const msg = document.createElement('div');
-    msg.className = `chat-message ${role}`;
-    msg.innerHTML = `<div class="msg-content">${text}</div>`;
-    chatHistoryEl.appendChild(msg);
-    chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
+    msg.className = `chat-msg ${role}`;
+    const avatar = role === 'user' ? '👤' : '🤖';
+    msg.innerHTML = `
+        <div class="msg-avatar">${avatar}</div>
+        <div class="msg-bubble">
+            <div class="msg-text">${formatMarkdown(text)}</div>
+        </div>
+    `;
+    conv.appendChild(msg);
+    conv.scrollTop = conv.scrollHeight;
     return msg;
-};
+}
 
-const appendToolCard = (type, data) => {
+function formatMarkdown(text) {
+    if (!text) return '';
+    let html = escapeHtml(text);
+    html = html.replace(/```([\s\S]*?)```/g, '<pre class="code-block"><code>$1</code></pre>');
+    html = html.replace(/`([^`]+)`/g, '<code style="background:#27272a; padding:2px 4px; border-radius:3px;">$1</code>');
+    html = html.replace(/\n/g, '<br/>');
+    return html;
+}
+
+function appendToolCard(type, data) {
+    const conv = document.getElementById('chat-conversation');
+    if (!conv) return;
     const card = document.createElement('div');
     card.className = 'tool-card';
     
     let body = '', actions = '';
     const proposalId = data.proposal_id || ('prop_' + Math.random().toString(36).substr(2, 9));
 
-    if (type === 'write_file' || type === 'edit_file') {
-        const filePath = data.path || data.target || 'file.txt';
-        const diffText = data.diff || data.new_content || '';
-        body = `<strong>檔案修改提案:</strong> <code>${filePath}</code><pre style="max-height:120px; overflow:auto; margin-top:5px; background:#000; padding:5px; border-radius:4px; font-size:11px;">${escapeHtml(diffText)}</pre>`;
+    if (type === 'edit_file' || type === 'write_file') {
+        const path = data.path || data.target || 'file.txt';
+        const diff = data.diff || data.new_content || '';
+        body = `<div>檔案: <code>${path}</code></div><pre class="code-block" style="max-height:100px; margin-top:4px;">${escapeHtml(diff)}</pre>`;
         actions = `
-            <button class="btn-sm accept" onclick="acceptProposal('${proposalId}')">批准套用 ✓</button>
-            <button class="btn-sm reject" onclick="rejectProposal('${proposalId}')">捨棄 ✗</button>
+            <button class="btn btn-primary btn-sm" onclick="acceptProposal('${proposalId}')">批准套用 ✓</button>
+            <button class="btn btn-secondary btn-sm" onclick="rejectProposal('${proposalId}')">捨棄 ✗</button>
         `;
     } else if (type === 'run_command') {
         const cmd = data.command || '';
-        body = `<strong>終端命令提案:</strong> <code>${cmd}</code>`;
-        actions = `<button class="btn-sm" onclick="runInTerminal('${escapeHtml(cmd)}')">在終端執行 ▶</button>`;
+        body = `<div>命令: <code>${cmd}</code></div>`;
+        actions = `<button class="btn btn-secondary btn-sm" onclick="runInTerminal('${escapeHtml(cmd)}')">在終端執行 ▶</button>`;
     } else {
-        body = `<strong>工具呼叫:</strong> ${type}<pre style="font-size:11px;">${JSON.stringify(data, null, 2)}</pre>`;
+        body = `<div>${type}</div><pre class="code-block">${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
     }
 
     card.innerHTML = `
@@ -490,16 +490,31 @@ const appendToolCard = (type, data) => {
         <div class="tool-body">${body}</div>
         <div class="tool-actions">${actions}</div>
     `;
-    
-    chatHistoryEl.appendChild(card);
-    chatHistoryEl.scrollTop = chatHistoryEl.scrollHeight;
-};
+    conv.appendChild(card);
+    conv.scrollTop = conv.scrollHeight;
+}
+
+function showDiffReviewBar(proposal) {
+    const bar = document.getElementById('diff-review-bar');
+    const pathEl = document.getElementById('diff-target-file');
+    if (!bar) return;
+    state.pendingProposal = proposal;
+    if (pathEl) pathEl.textContent = proposal.path || 'file.txt';
+    bar.classList.remove('hidden');
+
+    const acceptBtn = document.getElementById('btn-diff-accept');
+    const rejectBtn = document.getElementById('btn-diff-reject');
+    if (acceptBtn) acceptBtn.onclick = () => acceptProposal(proposal.proposal_id);
+    if (rejectBtn) rejectBtn.onclick = () => rejectProposal(proposal.proposal_id);
+}
 
 window.acceptProposal = async (proposalId) => {
     try {
         const res = await fetch(`/api/proposals/${encodeURIComponent(proposalId)}/accept`, { method: 'POST' });
         const data = await res.json();
-        alert(`提案 ${proposalId} 已成功套用！`);
+        alert(`提案 ${proposalId} 已成功寫入磁碟！`);
+        const bar = document.getElementById('diff-review-bar');
+        if (bar) bar.classList.add('hidden');
         loadWorkspaceTree();
         if (state.activeFile) openFile(state.activeFile, state.activeFile.split('/').pop());
     } catch(e) {
@@ -511,32 +526,140 @@ window.rejectProposal = async (proposalId) => {
     try {
         await fetch(`/api/proposals/${encodeURIComponent(proposalId)}/reject`, { method: 'POST' });
         alert(`提案 ${proposalId} 已捨棄。`);
+        const bar = document.getElementById('diff-review-bar');
+        if (bar) bar.classList.add('hidden');
     } catch(e) {
         alert(`操作失敗: ${e.message}`);
     }
 };
 
 window.runInTerminal = (cmd) => {
-    if (terminalInput) {
-        terminalInput.value = cmd;
-        terminalInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
+    const input = document.getElementById('terminal-input');
+    if (input) {
+        input.value = cmd;
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }));
     }
 };
 
-function escapeHtml(text) {
-    if (!text) return '';
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+// --- Modals Setup ---
+function setupModals() {
+    // Open modal buttons
+    const bindModal = (btnId, modalId) => {
+        const btn = document.getElementById(btnId);
+        const modal = document.getElementById(modalId);
+        if (btn && modal) {
+            btn.addEventListener('click', () => {
+                modal.classList.remove('hidden');
+                if (modalId === 'modal-settings') refreshSettingsModal();
+            });
+        }
+    };
+    bindModal('btn-docs', 'modal-docs');
+    bindModal('btn-settings', 'modal-settings');
+
+    // Close buttons
+    document.querySelectorAll('.btn-close-modal').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const targetId = e.currentTarget.dataset.target;
+            const modal = document.getElementById(targetId) || e.currentTarget.closest('.modal-overlay');
+            if (modal) modal.classList.add('hidden');
+        });
+    });
+
+    // Close on overlay background click
+    document.querySelectorAll('.modal-overlay').forEach(modal => {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.classList.add('hidden');
+        });
+    });
+
+    // Docs tab switching
+    document.querySelectorAll('.doc-tab-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.doc-tab-btn').forEach(b => b.classList.remove('active'));
+            e.currentTarget.classList.add('active');
+            
+            const targetId = e.currentTarget.dataset.tab;
+            document.querySelectorAll('.doc-pane').forEach(p => p.classList.remove('active'));
+            const targetPane = document.getElementById(targetId);
+            if (targetPane) targetPane.classList.add('active');
+        });
+    });
+
+    // Recheck providers in settings
+    const recheckBtn = document.getElementById('btn-recheck-providers');
+    if (recheckBtn) recheckBtn.addEventListener('click', refreshSettingsModal);
+
+    // Save settings
+    const saveSettingsBtn = document.getElementById('btn-save-settings');
+    if (saveSettingsBtn) {
+        saveSettingsBtn.addEventListener('click', () => {
+            const defaultMode = document.getElementById('setting-default-mode').value;
+            state.agentMode = defaultMode;
+            document.querySelectorAll('.mode-pill').forEach(pill => {
+                pill.classList.toggle('active', pill.dataset.mode === defaultMode);
+            });
+            const modal = document.getElementById('modal-settings');
+            if (modal) modal.classList.add('hidden');
+            alert('設定已儲存！');
+        });
+    }
+}
+
+async function refreshSettingsModal() {
+    try {
+        const res = await fetch('/api/providers');
+        const data = await res.json();
+        const provs = data.providers || [];
+
+        const updateBadge = (id, name) => {
+            const badge = document.getElementById(id);
+            if (!badge) return;
+            const found = provs.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+            if (found && found.active) {
+                badge.className = 'badge connected';
+                badge.textContent = '🟢 連線中 (Connected)';
+            } else {
+                badge.className = 'badge disconnected';
+                badge.textContent = '🔴 離線 (Disconnected)';
+            }
+        };
+
+        updateBadge('set-badge-chatgpt', 'chatgpt');
+        updateBadge('set-badge-gemini', 'gemini');
+        updateBadge('set-badge-deepseek', 'deepseek');
+
+        // Header indicators
+        const updateHeader = (id, name) => {
+            const pill = document.getElementById(id);
+            if (!pill) return;
+            const found = provs.find(p => p.name.toLowerCase().includes(name.toLowerCase()));
+            const dot = pill.querySelector('.dot');
+            if (found && found.active) {
+                pill.classList.add('active');
+                if (dot) dot.className = 'dot online';
+            } else {
+                pill.classList.remove('active');
+                if (dot) dot.className = 'dot';
+            }
+        };
+        updateHeader('prov-chatgpt', 'chatgpt');
+        updateHeader('prov-gemini', 'gemini');
+        updateHeader('prov-deepseek', 'deepseek');
+    } catch (e) {
+        console.warn('Failed to refresh providers status', e);
+    }
 }
 
 // --- App Initialization ---
 window.addEventListener('DOMContentLoaded', () => {
-    initEditor();
+    initMonaco();
     loadWorkspaceTree();
-    setupModals();
     setupTerminal();
-    setupChat();
-    refreshProviderStatus();
+    setupAgentChat();
+    setupModals();
+    refreshSettingsModal();
 
-    const refreshBtn = document.getElementById('btn-refresh');
-    if (refreshBtn) refreshBtn.addEventListener('click', () => loadWorkspaceTree());
+    const refreshTreeBtn = document.getElementById('btn-refresh-tree');
+    if (refreshTreeBtn) refreshTreeBtn.addEventListener('click', () => loadWorkspaceTree());
 });

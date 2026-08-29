@@ -1,217 +1,358 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebChat2Local Studio v4</title>
-    <link rel="stylesheet" href="studio.css">
-    <!-- Monaco Editor requires a container and minimal styling -->
-    <style>
-        #editor-container {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-        }
-    </style>
+    <title>WebChat2Local Studio - AI Coding IDE</title>
+    <link rel="stylesheet" href="/static/studio/studio.css">
+    <link rel="stylesheet" href="/studio.css">
 </head>
 <body>
     <div class="app-container">
-        <!-- Header -->
+        <!-- Top App Header -->
         <header class="app-header">
-            <div class="logo">
-                <span class="logo-icon">▲</span>
-                <span class="logo-text">WebChat2Local Studio</span>
+            <div class="header-left">
+                <div class="brand">
+                    <span class="brand-logo">▲</span>
+                    <span class="brand-name">WebChat2Local Studio</span>
+                    <span class="brand-version">v4.2</span>
+                </div>
+                <div class="workspace-badge" id="workspace-badge" title="Current Workspace Root">
+                    <span class="badge-icon">📁</span>
+                    <span class="badge-text" id="workspace-path">WebChat2Local</span>
+                </div>
             </div>
-            <div class="header-actions">
-                <button id="btn-docs" class="btn btn-ghost" title="Docs & Specs">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
+            
+            <div class="header-center">
+                <div class="provider-indicators" id="header-providers" title="Web LLM Providers Status">
+                    <span class="prov-pill" id="prov-chatgpt"><span class="dot"></span>ChatGPT</span>
+                    <span class="prov-pill" id="prov-gemini"><span class="dot"></span>Gemini</span>
+                    <span class="prov-pill" id="prov-deepseek"><span class="dot"></span>DeepSeek</span>
+                    <span class="prov-pill active" id="prov-mcp"><span class="dot online"></span>MCP Server</span>
+                </div>
+            </div>
+
+            <div class="header-right">
+                <button id="btn-docs" class="btn btn-ghost" title="開啟完整說明書與規格手冊">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path></svg>
                     <span>說明書與規格指引</span>
                 </button>
-                <button id="btn-settings" class="btn btn-ghost" title="Settings">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
-                    <span>伺服器與模型設定</span>
+                <button id="btn-settings" class="btn btn-ghost" title="伺服器與模型連線設定">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    <span>伺服器設定</span>
                 </button>
             </div>
         </header>
 
-        <div class="main-content">
-            <!-- Sidebar / Workspace Tree -->
-            <aside class="sidebar">
-                <div class="sidebar-header">
-                    <h3>Explorer</h3>
-                    <div class="sidebar-actions">
-                        <button id="btn-new-file" title="New File"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg></button>
-                        <button id="btn-new-folder" title="New Folder"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg></button>
-                        <button id="btn-refresh" title="Refresh"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></button>
+        <!-- Main 3-Pane Work Area -->
+        <main class="main-layout">
+            <!-- Left Pane: File Explorer -->
+            <aside class="sidebar-pane">
+                <div class="pane-header">
+                    <span class="pane-title">檔案總管 (EXPLORER)</span>
+                    <div class="pane-actions">
+                        <button id="btn-new-file" title="新增檔案" class="icon-btn">＋📄</button>
+                        <button id="btn-refresh-tree" title="重新整理檔案樹" class="icon-btn">🔄</button>
                     </div>
                 </div>
-                <div class="file-tree" id="file-tree">
-                    <!-- Dynamic Tree populated via JS -->
+                <div class="file-tree-container" id="file-tree">
+                    <!-- Dynamic File Tree -->
                 </div>
             </aside>
 
-            <!-- Center Panel (Editor + Terminal) -->
-            <section class="center-panel">
+            <!-- Center Pane: Editor + Terminal -->
+            <section class="editor-pane">
                 <!-- Editor Tabs -->
-                <div class="editor-tabs" id="editor-tabs">
-                    <!-- Dynamic Tabs -->
+                <div class="tabs-bar" id="editor-tabs">
+                    <div class="tab-placeholder">尚無開啟檔案</div>
                 </div>
-                <!-- Monaco Editor Area -->
-                <div class="editor-area">
-                    <div id="editor-container"></div>
-                    <div id="fallback-editor" style="display:none; width:100%; height:100%;">
-                        <textarea id="basic-textarea" style="width:100%; height:100%; background:#1e1e1e; color:#d4d4d4; border:none; padding:10px; font-family:monospace;"></textarea>
+
+                <!-- Monaco Code Editor -->
+                <div class="editor-workspace">
+                    <div id="monaco-editor-container" class="monaco-container"></div>
+                    <div id="fallback-editor" class="fallback-container" style="display:none;">
+                        <textarea id="basic-textarea" spellcheck="false" placeholder="點擊左側檔案開始編輯..."></textarea>
                     </div>
-                </div>
-                <!-- Terminal Pane -->
-                <div class="terminal-pane">
-                    <div class="terminal-header">
-                        <span class="terminal-title">Terminal - PowerShell</span>
-                        <div class="terminal-actions">
-                            <button id="btn-term-clear" title="Clear Terminal"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
-                            <button id="btn-term-kill" title="Kill Process"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg></button>
-                            <button id="btn-term-max" title="Maximize/Minimize"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg></button>
+
+                    <!-- ChangeSet Diff Review Bar (Visible when proposal is pending) -->
+                    <div id="diff-review-bar" class="diff-review-bar hidden">
+                        <div class="diff-info">
+                            <span class="diff-tag">AI 檔案修改提案審查</span>
+                            <span id="diff-target-file" class="diff-path">path/to/file</span>
+                        </div>
+                        <div class="diff-actions">
+                            <button id="btn-diff-accept" class="btn btn-primary btn-sm">批准套用 (Accept ✓)</button>
+                            <button id="btn-diff-reject" class="btn btn-secondary btn-sm">捨棄 (Reject ✗)</button>
                         </div>
                     </div>
-                    <div class="terminal-output" id="terminal-output">
-                        <div class="term-line welcome">WebChat2Local Studio Terminal Initialized.</div>
+                </div>
+
+                <!-- PowerShell Terminal Console -->
+                <div class="terminal-pane" id="terminal-pane">
+                    <div class="terminal-header">
+                        <div class="terminal-title">
+                            <span class="term-icon">⚡</span>
+                            <span>PowerShell 終端機</span>
+                        </div>
+                        <div class="terminal-controls">
+                            <button id="btn-term-clear" class="icon-btn" title="清除輸出">🗑️ 清除</button>
+                        </div>
                     </div>
-                    <div class="terminal-input-bar">
-                        <span class="prompt">PS&gt;</span>
-                        <input type="text" id="terminal-input" placeholder="Type command e.g. dir, python test.py..." autocomplete="off" spellcheck="false">
+                    <div class="terminal-body" id="terminal-output">
+                        <div class="term-line sys">WebChat2Local Studio Terminal [Version 4.2] Initialized.</div>
+                        <div class="term-line sys">支援執行 PowerShell 命令 (例如: dir, git status, pytest tests/ -v)</div>
+                    </div>
+                    <div class="terminal-input-row">
+                        <span class="term-prompt">PS&gt;</span>
+                        <input type="text" id="terminal-input" placeholder="輸入指令並按 Enter 執行..." autocomplete="off" spellcheck="false">
                     </div>
                 </div>
             </section>
 
-            <!-- Right Sidebar / Agent Chat -->
-            <aside class="chat-panel">
-                <div class="chat-header">
-                    <div class="mode-selector">
-                        <button class="mode-btn active" data-mode="AGENT">AGENT</button>
-                        <button class="mode-btn" data-mode="ASK">ASK</button>
-                        <button class="mode-btn" data-mode="PLAN">PLAN</button>
-                        <button class="mode-btn" data-mode="CODE">CODE</button>
-                        <button class="mode-btn" data-mode="DEBUG">DEBUG</button>
+            <!-- Right Pane: AI Agent Chat -->
+            <aside class="agent-pane">
+                <div class="agent-header">
+                    <div class="mode-pills">
+                        <button class="mode-pill active" data-mode="AGENT">AGENT</button>
+                        <button class="mode-pill" data-mode="ASK">ASK</button>
+                        <button class="mode-pill" data-mode="PLAN">PLAN</button>
+                        <button class="mode-pill" data-mode="CODE">CODE</button>
+                        <button class="mode-pill" data-mode="DEBUG">DEBUG</button>
                     </div>
-                    <div class="chat-status">
-                        <span class="status-indicator online"></span>
-                        <span class="tokens">~0 tkns</span>
-                    </div>
-                </div>
-                <div class="chat-history" id="chat-history">
-                    <div class="chat-message system">
-                        <div class="msg-content">Agent connected. Ready to assist.</div>
+                    <div class="agent-options">
+                        <label class="autopilot-toggle" title="開啟後安全檔案修改自動批准">
+                            <input type="checkbox" id="chat-autopilot">
+                            <span>Auto-pilot</span>
+                        </label>
                     </div>
                 </div>
-                <div class="chat-input-container">
-                    <textarea id="chat-input" placeholder="Ask AI or press @ to mention files..." rows="2"></textarea>
-                    <div id="at-mention-popup" class="mention-popup hidden"></div>
-                    <div class="chat-input-actions">
-                        <button id="btn-send-chat" class="btn btn-primary">Send ⏎</button>
+
+                <!-- Chat History Messages -->
+                <div class="chat-conversation" id="chat-conversation">
+                    <div class="chat-msg system">
+                        <div class="msg-avatar">🤖</div>
+                        <div class="msg-bubble">
+                            <div class="msg-title">WebChat2Local Coding Agent 已就緒</div>
+                            <div class="msg-text">我可以幫您閱讀代碼、搜尋專案、修改檔案、執行測試或建立全新架構。<br/>在下方輸入需求即可開始！</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Input Box -->
+                <div class="chat-input-wrapper">
+                    <div class="context-bar" id="context-bar">
+                        <span class="ctx-tag" id="active-file-tag">未選取檔案</span>
+                        <span class="ctx-tip">提示：輸入 @ 提及檔案名稱</span>
+                    </div>
+                    <textarea id="chat-prompt-input" rows="3" placeholder="向 AI 下達指令... (Shift+Enter 換行，Enter 發送)"></textarea>
+                    <div class="input-actions-bar">
+                        <span class="token-estimate" id="token-estimate">~0 tokens</span>
+                        <button id="btn-send-agent" class="btn btn-primary">發送 (Send ⏎)</button>
                     </div>
                 </div>
             </aside>
-        </div>
+        </main>
     </div>
 
-    <!-- Modals -->
-    <!-- Docs & Specs Modal -->
-    <div id="modal-docs" class="modal hidden">
-        <div class="modal-content large">
-            <div class="modal-header">
-                <h2>說明書與規格指引 (Docs & Specs)</h2>
-                <button class="btn-close-modal">✕</button>
-            </div>
-            <div class="modal-body">
-                <div class="tabs">
-                    <button class="tab-btn active" data-tab="doc-quickstart">快速上手</button>
-                    <button class="tab-btn" data-tab="doc-tools">工具規範</button>
-                    <button class="tab-btn" data-tab="doc-mcp">本地 MCP Server</button>
-                    <button class="tab-btn" data-tab="doc-agent">權限與 Agent</button>
-                    <button class="tab-btn" data-tab="doc-rules">系統 Prompt</button>
-                </div>
-                <div class="tab-content active" id="doc-quickstart">
-                    <h3>5分鐘指引</h3>
-                    <p>1. 連線 ChatGPT / Gemini / DeepSeek 擴充套件。</p>
-                    <p>2. 開啟 Studio 並確認右下角綠燈。</p>
-                    <p>3. 於右側對話框下達第一個 AI Coding 指令，例如「幫我建立一個 index.html」。</p>
-                </div>
-                <div class="tab-content" id="doc-tools">
-                    <h3>工具規範 (Tool Specs)</h3>
-                    <p>支援 7 款 Canonical Tools：</p>
-                    <ul>
-                        <li><code>read_file</code></li>
-                        <li><code>edit_file</code></li>
-                        <li><code>create_file</code></li>
-                        <li><code>delete_file</code></li>
-                        <li><code>list_directory</code></li>
-                        <li><code>grep_search</code></li>
-                        <li><code>run_command</code></li>
-                    </ul>
-                </div>
-                <div class="tab-content" id="doc-mcp">
-                    <h3>本地 MCP Server 指引</h3>
-                    <p>如何在 Eclipse Theia、Cursor、Claude Desktop 中設定 STDIO (<code>python -m server.mcp.mcp_server</code>) 或 Streamable HTTP (<code>http://127.0.0.1:8765/mcp</code>)。</p>
-                </div>
-                <div class="tab-content" id="doc-agent">
-                    <h3>權限與 Agent 模式</h3>
-                    <p>支援 <code>ASK</code>, <code>PLAN</code>, <code>CODE</code>, <code>DEBUG</code>, <code>AGENT</code> 模式。</p>
-                    <p>4 級權限策略：<code>AUTO</code>, <code>CONFIRM</code>, <code>SESSION_ALLOW</code>, <code>DENY</code>。</p>
-                </div>
-                <div class="tab-content" id="doc-rules">
-                    <h3>系統 Prompt 與 Rules</h3>
-                    <p>在專案中建立 <code>.webchat2local/rules/</code> 自訂規則，系統會自動載入。</p>
-                </div>
-            </div>
-        </div>
-    </div>
+    <!-- ================= MODALS ================= -->
 
-    <!-- Settings Modal -->
-    <div id="modal-settings" class="modal hidden">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>⚙️ 伺服器與模型設定</h2>
-                <button class="btn-close-modal">✕</button>
+    <!-- 1. OpenCode-grade Documentation & Specification Modal -->
+    <div id="modal-docs" class="modal-overlay hidden">
+        <div class="modal-window large">
+            <div class="modal-head">
+                <div class="modal-title">
+                    <span class="icon">📖</span>
+                    <span>WebChat2Local Studio 說明書與規格手冊 (Docs & Specs)</span>
+                </div>
+                <button class="btn-close-modal" data-target="modal-docs">✕</button>
             </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>Web Provider 狀態</label>
-                    <div class="provider-status">
-                        <span class="badge connected">ChatGPT: Connected</span>
-                        <span class="badge disconnected">Gemini: Disconnected</span>
+            
+            <div class="modal-content-layout">
+                <!-- Nav Tabs -->
+                <nav class="doc-tabs">
+                    <button class="doc-tab-btn active" data-tab="tab-quickstart">🚀 快速上手</button>
+                    <button class="doc-tab-btn" data-tab="tab-tools">🛠️ Canonical Tools 規格</button>
+                    <button class="doc-tab-btn" data-tab="tab-mcp">🔌 本地 MCP Server 指引</button>
+                    <button class="doc-tab-btn" data-tab="tab-modes">🛡️ 權限與 Agent 模式</button>
+                    <button class="doc-tab-btn" data-tab="tab-rules">⚙️ 系統 Prompt 與 Rules</button>
+                </nav>
+
+                <!-- Tab Panes -->
+                <div class="doc-body">
+                    <!-- Tab 1: Quickstart -->
+                    <div class="doc-pane active" id="tab-quickstart">
+                        <h2>🚀 快速上手 (Quick Start)</h2>
+                        <p class="lead">WebChat2Local Studio 是一個專為本地開發者打造的 AI Coding IDE，透過瀏覽器擴充套件直接借力 ChatGPT / Gemini / DeepSeek 網頁版強大模型，並由本地交易引擎守護檔案安全。</p>
+                        
+                        <h3>三步驟開始使用：</h3>
+                        <ol class="step-list">
+                            <li>
+                                <strong>步驟 1：開啟瀏覽器擴充套件</strong>
+                                <p>在 Chrome 或 Edge 開啟 <a href="https://chatgpt.com" target="_blank">ChatGPT</a>、<a href="https://gemini.google.com" target="_blank">Gemini</a> 或 <a href="https://chat.deepseek.com" target="_blank">DeepSeek</a> 網頁，擴充套件會自動建立 WebSocket 連線至本地 <code>127.0.0.1:8765</code>。</p>
+                            </li>
+                            <li>
+                                <strong>步驟 2：確認連線燈號</strong>
+                                <p>Studio 頂部的 Provider 狀態燈會由灰色轉為綠色 🟢，表示 AI 模型通道已打通。</p>
+                            </li>
+                            <li>
+                                <strong>步驟 3：下達 Coding 指令</strong>
+                                <p>在右側 Agent 側邊欄輸入指令，例如：「幫我閱讀 <code>server/server.py</code> 並新增一個 <code>/health</code> 測試」，AI 將自動呼叫工具並生成修改提案供您審查。</p>
+                            </li>
+                        </ol>
+                    </div>
+
+                    <!-- Tab 2: Tool Specs -->
+                    <div class="doc-pane" id="tab-tools">
+                        <h2>🛠️ Canonical Tools 規格全書</h2>
+                        <p class="lead">系統標準工具均採用 JSON Schema 定義與 SHA-256 Revision 交易鎖定機制，徹底告別脆弱的 XML 協議。</p>
+
+                        <div class="tool-spec-card">
+                            <h3>1. <code>read_file</code> (讀取檔案與產出 Revision)</h3>
+                            <pre class="code-block"><code>// 輸入參數
+{ "path": "src/main.py" }
+
+// 輸出結構 (含 SHA-256 簽名)
+{
+  "path": "src/main.py",
+  "revision": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "content": "print('hello world')\n"
+}</code></pre>
+                        </div>
+
+                        <div class="tool-spec-card">
+                            <h3>2. <code>edit_file</code> (結構化文字替換與交易鎖定)</h3>
+                            <pre class="code-block"><code>// 輸入參數 (要求嚴格唯一的 Exact Match)
+{
+  "path": "src/main.py",
+  "revision": "sha256:e3b0c4...",
+  "edits": [
+    { "old_text": "print('hello world')", "new_text": "print('hello webchat2local')" }
+  ]
+}
+
+// 錯誤代碼規格:
+// • STALE_FILE: 檔案在讀取後已被外部修改
+// • EDIT_MISMATCH: old_text 比對不符 (附帶 Normalized Match 建議)
+// • AMBIGUOUS_MATCH: old_text 出現多次，需提供更多上下文</code></pre>
+                        </div>
+
+                        <div class="tool-spec-card">
+                            <h3>3. <code>run_command</code> (終端機命令執行)</h3>
+                            <pre class="code-block"><code>// 輸入參數
+{ "command": "pytest tests/ -v", "cwd": "." }
+
+// 輸出格式
+{ "exit_code": 0, "stdout": "36 passed in 2.5s", "stderr": "" }</code></pre>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Local MCP Server -->
+                    <div class="doc-pane" id="tab-mcp">
+                        <h2>🔌 本地 MCP (Model Context Protocol) Server 指引</h2>
+                        <p class="lead">內建官方 MCP Python SDK v2 實作，支援 <strong>STDIO</strong> 與 <strong>Streamable HTTP</strong>，可直接對接 Eclipse Theia、Claude Desktop、Cursor、Goose 等。</p>
+
+                        <h3>Eclipse Theia / Claude Desktop 設定檔 (<code>mcp_connector.json</code>)：</h3>
+                        <div class="code-container">
+                            <button class="copy-btn" onclick="copyCode('mcp-config-snippet')">複製設定 📋</button>
+                            <pre class="code-block" id="mcp-config-snippet"><code>{
+  "mcpServers": {
+    "webchat2local": {
+      "command": "python",
+      "args": ["-m", "server.mcp.mcp_server"],
+      "env": {
+        "W2L_WORKSPACE": "${workspaceFolder}"
+      }
+    },
+    "webchat2local-http": {
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}</code></pre>
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: Modes & Permissions -->
+                    <div class="doc-pane" id="tab-modes">
+                        <h2>🛡️ 權限策略與 Agent 模式</h2>
+                        <p class="lead">四級智慧權限控制，兼顧極速自動化與關鍵寫入安全。</p>
+
+                        <table class="doc-table">
+                            <thead>
+                                <tr><th>權限層級</th><th>適用操作</th><th>行為說明</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><code>AUTO</code></td><td><code>read_file</code>, <code>list_directory</code>, <code>grep_search</code></td><td>唯讀查詢自動執行，無需人工確認</td></tr>
+                                <tr><td><code>CONFIRM</code></td><td><code>edit_file</code>, <code>create_file</code>, <code>delete_file</code>, 危險指令</td><td>生成 ChangeSet Diff 提案，待用戶審查批准</td></tr>
+                                <tr><td><code>SESSION_ALLOW</code></td><td><code>pytest</code>, <code>git status</code> 等常規測試</td><td>單次確認後本次 Session 自動放行</td></tr>
+                                <tr><td><code>DENY</code></td><td>路徑穿越 (<code>../</code>)、UNC 路徑、機密檔案 (<code>.env</code>)</td><td>系統沙盒強制阻擋</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Tab 5: Rules & System Prompt -->
+                    <div class="doc-pane" id="tab-rules">
+                        <h2>⚙️ 系統 Prompt 與 Rules 自訂規範</h2>
+                        <p class="lead">在專案根目錄下建立 <code>.webchat2local/rules/</code> 目錄，撰寫 <code>.md</code> 規則檔案，Agent 在每次對話時會自動加載並嚴格遵循。</p>
+                        <pre class="code-block"><code>// .webchat2local/rules/coding-style.md 範例
+# 專案編程風格規範
+1. 所有 Python 函式必須包含 Type Hints。
+2. 避免引入非必要的第三方套件。
+3. 修改現有程式碼時，保留既有的註解與函式簽名。</code></pre>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label>預設 Agent 模式</label>
-                    <select id="setting-agent-mode" class="input-select">
-                        <option value="AGENT">AGENT</option>
-                        <option value="ASK">ASK</option>
-                        <option value="PLAN">PLAN</option>
-                        <option value="CODE">CODE</option>
-                        <option value="DEBUG">DEBUG</option>
-                    </select>
-                </div>
-                <div class="form-group flex-row">
-                    <label>Auto-pilot 模式</label>
-                    <label class="switch">
-                        <input type="checkbox" id="setting-autopilot">
-                        <span class="slider round"></span>
-                    </label>
-                </div>
-                <div class="form-group">
-                    <label>自訂 System Prompt</label>
-                    <textarea id="setting-system-prompt" rows="4" class="input-text"></textarea>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-primary">Save Changes</button>
             </div>
         </div>
     </div>
 
-    <!-- Monaco Editor Scripts -->
+    <!-- 2. Server & Connection Settings Modal -->
+    <div id="modal-settings" class="modal-overlay hidden">
+        <div class="modal-window">
+            <div class="modal-head">
+                <div class="modal-title">
+                    <span class="icon">⚙️</span>
+                    <span>伺服器與模型連線設定 (Settings)</span>
+                </div>
+                <button class="btn-close-modal" data-target="modal-settings">✕</button>
+            </div>
+            
+            <div class="modal-body settings-body">
+                <div class="form-section">
+                    <h4>Web Provider 狀態監控</h4>
+                    <div class="settings-providers" id="settings-providers-list">
+                        <div class="prov-row"><span>ChatGPT:</span> <span class="badge" id="set-badge-chatgpt">Checking...</span></div>
+                        <div class="prov-row"><span>Gemini:</span> <span class="badge" id="set-badge-gemini">Checking...</span></div>
+                        <div class="prov-row"><span>DeepSeek:</span> <span class="badge" id="set-badge-deepseek">Checking...</span></div>
+                    </div>
+                    <button id="btn-recheck-providers" class="btn btn-secondary btn-sm" style="margin-top:8px;">重新整理狀態 🔄</button>
+                </div>
+
+                <div class="form-section">
+                    <h4>Agent 預設模式</h4>
+                    <select id="setting-default-mode" class="form-select">
+                        <option value="AGENT">AGENT (全功能工具)</option>
+                        <option value="ASK">ASK (純問答)</option>
+                        <option value="PLAN">PLAN (規劃模式)</option>
+                        <option value="CODE">CODE (代碼生成)</option>
+                        <option value="DEBUG">DEBUG (除錯修復)</option>
+                    </select>
+                </div>
+
+                <div class="form-section">
+                    <h4>自訂 System Prompt / 全域規則</h4>
+                    <textarea id="setting-system-prompt" class="form-textarea" rows="4" placeholder="在此輸入自訂提示詞，將自動注入到所有對話中..."></textarea>
+                </div>
+
+                <div class="modal-footer">
+                    <button class="btn btn-primary" id="btn-save-settings">儲存設定</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Monaco AMD Loader & Studio Controller -->
     <script>var require = { paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } };</script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.js"></script>
-    <script src="studio.js"></script>
+    <script src="/static/studio/studio.js"></script>
+    <script src="/studio.js"></script>
 </body>
 </html>
