@@ -108,10 +108,16 @@ class AgentOrchestrator:
 
             msg_type = msg.get("type")
             if msg_type == "chunk":
-                chunk_text = msg.get("text", "")
-                full_response_text += chunk_text
-                yield {"type": EventType.MESSAGE_CHUNK.value, "delta": chunk_text}
+                chunk_text = msg.get("delta", "") or msg.get("text", "")
+                if chunk_text:
+                    full_response_text += chunk_text
+                    yield {"type": EventType.MESSAGE_CHUNK.value, "delta": chunk_text}
+                if msg.get("accumulated"):
+                    full_response_text = msg.get("accumulated")
             elif msg_type == "done":
+                done_full_text = msg.get("full_text", "")
+                if done_full_text:
+                    full_response_text = done_full_text
                 break
             elif msg_type == "error":
                 err_text = msg.get("error", "Unknown error")

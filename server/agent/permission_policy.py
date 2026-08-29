@@ -1,35 +1,22 @@
-from enum import Enum, auto
 from typing import Tuple, Dict, List, Optional
-
-class PermissionLevel(Enum):
-    AUTO = auto()
-    CONFIRM = auto()
-    SESSION_ALLOW = auto()
-    DENY = auto()
-
-class AgentMode(Enum):
-    ASK = auto()
-    PLAN = auto()
-    CODE = auto()
-    DEBUG = auto()
-    AGENT = auto()
+from server.core.constants import PermissionLevel, AgentMode, ToolName
 
 class ToolPermissionPolicy:
-    def __init__(self):
-        self.autopilot = False
+    def __init__(self, autopilot: bool = False):
+        self.autopilot = autopilot
         self.session_allow_lists: Dict[str, Dict[str, set]] = {}
         
         self.default_rules = {
-            "read_file": PermissionLevel.AUTO,
-            "list_directory": PermissionLevel.AUTO,
-            "grep_search": PermissionLevel.AUTO,
-            "create_file": PermissionLevel.CONFIRM,
-            "edit_file": PermissionLevel.CONFIRM,
-            "delete_file": PermissionLevel.CONFIRM,
-            "run_command": PermissionLevel.CONFIRM
+            ToolName.READ_FILE.value: PermissionLevel.AUTO,
+            ToolName.LIST_DIRECTORY.value: PermissionLevel.AUTO,
+            ToolName.GREP_SEARCH.value: PermissionLevel.AUTO,
+            ToolName.CREATE_FILE.value: PermissionLevel.CONFIRM,
+            ToolName.EDIT_FILE.value: PermissionLevel.CONFIRM,
+            ToolName.DELETE_FILE.value: PermissionLevel.CONFIRM,
+            ToolName.RUN_COMMAND.value: PermissionLevel.CONFIRM
         }
         
-        self.safe_commands = {"pytest", "npm test", "git status"}
+        self.safe_commands = {"pytest", "npm test", "git status", "dir", "echo"}
         
     def set_autopilot(self, enabled: bool):
         self.autopilot = enabled
@@ -46,12 +33,15 @@ class ToolPermissionPolicy:
             self.session_allow_lists[session_id][tool_name].add("*")
             
     def check_permission(self, tool_name: str, arguments: dict, session_id: Optional[str] = None) -> Tuple[PermissionLevel, str]:
+        if self.autopilot:
+            return PermissionLevel.AUTO, "Autopilot enabled"
+
         if tool_name not in self.default_rules:
             return PermissionLevel.DENY, f"Unknown tool {tool_name}"
             
         base_level = self.default_rules[tool_name]
         
-        if tool_name == "run_command":
+        if tool_name == ToolName.RUN_COMMAND.value:
             cmd = arguments.get("command", "")
             if any(cmd.startswith(safe_cmd) for safe_cmd in self.safe_commands):
                 return PermissionLevel.SESSION_ALLOW, "Safe command"
@@ -60,25 +50,55 @@ class ToolPermissionPolicy:
             if tool_name in self.session_allow_lists[session_id]:
                 allowed_cmds = self.session_allow_lists[session_id][tool_name]
                 if "*" in allowed_cmds:
-                    return PermissionLevel.SESSION_ALLOW, "Session allowed tool"
-                if tool_name == "run_command" and "command" in arguments:
-                    if arguments["command"] in allowed_cmds:
-                        return PermissionLevel.SESSION_ALLOW, "Session allowed command"
-                        
-        if self.autopilot and base_level == PermissionLevel.CONFIRM and tool_name in ["create_file", "edit_file"]:
-            return PermissionLevel.AUTO, "Autopilot enabled"
-            
+                    return PermissionLevel.SESSION_ALLOW, "Session allowed"
+                cmd = arguments.get("command", "")
+                if cmd in allowed_cmds:
+                    return PermissionLevel.SESSION_ALLOW, "Session allowed command"
+                    
         return base_level, "Default policy"
+
+    def get_available_tools_for_mode(self, mode: AgentMode | str) -> List[str]:
+        mode_str = mode.value if isinstance(mode, AgentMode) else str(mode)
         
-    def get_available_tools_for_mode(self, mode: AgentMode) -> List[str]:
-        if mode == AgentMode.ASK:
+        if mode_str == AgentMode.ASK.value:
             return []
-        elif mode == AgentMode.PLAN:
-            return ["read_file", "list_directory", "grep_search"]
-        elif mode == AgentMode.CODE:
-            return ["read_file", "list_directory", "grep_search", "create_file", "edit_file"]
-        elif mode == AgentMode.DEBUG:
-            return ["read_file", "list_directory", "grep_search", "run_command"]
-        elif mode == AgentMode.AGENT:
-            return list(self.default_rules.keys())
-        return []
+        elif mode_str == AgentMode.PLAN.value:
+            return [
+                ToolName.READ_FILE.value,
+                ToolName.LIST_DIRECTORY.value,
+                ToolName.GREP_SEARCH.value
+            ]
+        elif mode_str == AgentMode.CODE.value:
+            return [
+                ToolName.READ_FILE.value,
+                ToolName.LIST_DIRECTORY.value,
+                ToolName.GREP_SEARCH.value,
+                ToolName.CREATE_FILE.value,
+                ToolName.EDIT_FILE.value
+            ]
+        elif mode_str == AgentMode.DEBUG.value:
+            return [
+                ToolName.READ_FILE.value,
+                ToolName.LIST_DIRECTORY.value,
+                ToolName.GREP_SEARCH.value,
+                ToolName.RUN_COMMAND.value
+            ]
+        elif mode_str == AgentMode.AGENT.value:
+            return [
+                ToolName.READ_FILE.value,
+                ToolName.LIST_DIRECTORY.value,
+                ToolName.GREP_SEARCH.value,
+                ToolName.CREATE_FILE.value,
+                ToolName.EDIT_FILE.value,
+                ToolName.DELETE_FILE.value,
+                ToolName.RUN_COMMAND.value
+            ]
+        return [
+            ToolName.READ_FILE.value,
+            ToolName.LIST_DIRECTORY.value,
+            ToolName.GREP_SEARCH.value,
+            ToolName.CREATE_FILE.value,
+            ToolName.EDIT_FILE.value,
+            ToolName.DELETE_FILE.value,
+            ToolName.RUN_COMMAND.value
+        ]
