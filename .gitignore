@@ -22,3 +22,17 @@ page_snapshot.png
 .idea/
 .DS_Store
 Thumbs.db
+
+# Credentials / cookies (never commit)
+gemini_cookies.json
+*.pem
+*.key
+*.pfx
+*.p12
+.env
+.env.local
+credentials.json
+id_rsa
+id_ed25519
+
+.codex-chatgpt-web

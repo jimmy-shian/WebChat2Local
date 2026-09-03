@@ -1,109 +1,124 @@
+"""
+Protocol schemas and data structures for OpenAI Chat Completions,
+Codex/Antigravity Responses API, and Browser WebSocket bridging.
+"""
+
+from typing import List, Dict, Any, Optional, Union, Literal
+from pydantic import BaseModel, Field, ConfigDict
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+
+
+# ==========================================
+# OpenAI Chat Completions Protocol Models
+# ==========================================
+
+class FunctionCall(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str = Field(default_factory=lambda: f"call_{uuid.uuid4().hex[:12]}")
+    type: Literal["function"] = "function"
+    function: FunctionCall
 
 
 class ChatMessage(BaseModel):
-    role: str
-    content: Union[str, List[Any]]
+    model_config = ConfigDict(extra="ignore")
+
+    role: str  # "system", "user", "assistant", "tool", "developer"
+    content: Optional[Union[str, List[Any], Dict[str, Any]]] = ""
     name: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
+    tool_call_id: Optional[str] = None
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "gpt-4o"
+    model_config = ConfigDict(extra="ignore")
+
+    model: str = "gemini-web/pro"
     messages: List[ChatMessage]
-    temperature: Optional[float] = 1.0
-    top_p: Optional[float] = 1.0
-    n: Optional[int] = 1
     stream: Optional[bool] = False
-    stop: Optional[Union[str, List[str]]] = None
+    temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
-    presence_penalty: Optional[float] = 0.0
-    frequency_penalty: Optional[float] = 0.0
-    user: Optional[str] = None
-    tools: Optional[List[Any]] = None
+    tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[Union[str, Dict[str, Any]]] = None
 
 
-class ModelItem(BaseModel):
-    id: str
-    object: str = "model"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    owned_by: str = "openai"
-
-
-class ModelListResponse(BaseModel):
-    object: str = "list"
-    data: List[ModelItem]
-
-
-class StreamChoiceDelta(BaseModel):
-    role: Optional[str] = None
-    content: Optional[str] = None
-
-
-class StreamChoice(BaseModel):
-    index: int = 0
-    delta: StreamChoiceDelta
-    finish_reason: Optional[str] = None
-
-
-class ChatCompletionStreamChunk(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex[:12]}")
-    object: str = "chat.completion.chunk"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    model: str
-    choices: List[StreamChoice]
-
-
-class NonStreamChoice(BaseModel):
+class ChatCompletionResponseChoice(BaseModel):
     index: int = 0
     message: ChatMessage
     finish_reason: Optional[str] = "stop"
 
 
 class ChatCompletionResponse(BaseModel):
-    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex[:12]}")
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex}")
     object: str = "chat.completion"
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    choices: List[NonStreamChoice]
-    usage: Dict[str, int] = Field(
-        default_factory=lambda: {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
-    )
+    choices: List[ChatCompletionResponseChoice]
+    usage: Dict[str, int] = Field(default_factory=lambda: {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0
+    })
 
 
-# WebSocket internal message models
-class WSJobRequest(BaseModel):
-    type: str = "chat_request"
-    request_id: str
+class ChatCompletionChunkDelta(BaseModel):
+    role: Optional[str] = None
+    content: Optional[str] = None
+    reasoning_content: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+
+
+class ChatCompletionChunkChoice(BaseModel):
+    index: int = 0
+    delta: ChatCompletionChunkDelta
+    finish_reason: Optional[str] = None
+
+
+class ChatCompletionChunk(BaseModel):
+    id: str = Field(default_factory=lambda: f"chatcmpl-{uuid.uuid4().hex}")
+    object: str = "chat.completion.chunk"
+    created: int = Field(default_factory=lambda: int(time.time()))
     model: str
-    messages: List[Dict[str, Any]]
-    stream: bool = True
-    parent_message_id: Optional[str] = None
-    conversation_id: Optional[str] = None
+    choices: List[ChatCompletionChunkChoice]
 
 
-class WSChunkResponse(BaseModel):
-    type: str = "chunk"
-    request_id: str
-    delta: str
-    accumulated: Optional[str] = None
+# ==========================================
+# Responses API (Codex/Antigravity) Models
+# ==========================================
+
+class ResponsesRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    model: str = "gemini-web/pro"
+    input: Union[str, List[Any], Dict[str, Any]]
+    stream: Optional[bool] = True
+    tools: Optional[List[Dict[str, Any]]] = None
 
 
-class WSDoneResponse(BaseModel):
-    type: str = "done"
-    request_id: str
-    full_text: Optional[str] = None
-    finish_reason: Optional[str] = "stop"
+# ==========================================
+# WebSocket Bridge Protocols
+# ==========================================
+
+class WSIncomingMessage(BaseModel):
+    type: str  # "ready", "chunk", "done", "error", "pong", "status"
+    turn_id: Optional[str] = None
+    text: Optional[str] = None
+    delta: Optional[str] = None
+    thought: Optional[str] = None
+    thought_delta: Optional[str] = None
+    is_generating: Optional[bool] = False
+    error: Optional[str] = None
+    meta: Optional[Dict[str, Any]] = None
 
 
-class WSErrorResponse(BaseModel):
-    type: str = "error"
-    request_id: str
-    error: str
+class WSOutgoingMessage(BaseModel):
+    type: str  # "submit_prompt", "ping", "stop", "status_query"
+    turn_id: Optional[str] = None
+    prompt: Optional[str] = None
+    model: Optional[str] = None
+    options: Optional[Dict[str, Any]] = None

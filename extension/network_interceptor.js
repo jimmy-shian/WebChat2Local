@@ -1,254 +1,73 @@
 /**
- * WebChat2Local Network Interceptor (v3.3.0 - Raw Transport Capture)
- * Injected into MAIN world at document_start (see manifest.json).
- *
- * Purpose:
- *   Captures the RAW, UNRENDERED network stream (SSE / Batchexecute) directly from
- *   ChatGPT, Gemini & DeepSeek backends. This is the ONLY reliable way to obtain pristine text
- *   containing XML tool tags (<attempt_completion>, <read_file>, <result> ...),
- *   because once the browser renders the response into DOM, those tags are consumed
- *   as HTML elements and can never be recovered from innerText.
- *
- * Supported transports:
- *   - ChatGPT:  POST backend-api conversation endpoints (classic SSE "data: {...}"
- *               lines, including the 2025+ JSON-Patch {"p","o","v"} delta format)
- *   - Gemini:   POST StreamGenerate / Batchexecute (nested JSON arrays)
- *   - DeepSeek: POST /api/v0/chat/completion endpoints (OpenAI-like SSE streams)
- *
- * Communication:
- *   - content.js -> interceptor : window.postMessage({type:"W2L_SET_ACTIVE_REQUEST", request_id})
- *                                 window.postMessage({type:"W2L_CLEAR_ACTIVE_REQUEST"})
- *   - interceptor -> content.js : window.postMessage({source:"webchat2local-network", ...})
+ * Gemini Web raw transport interceptor.
+ * Gemini-only by design: capture the active answer stream so text and
+ * <tool_call> payloads survive DOM rendering.
  */
-
 (function () {
   if (window.__WebChat2Local_Interceptor_Loaded) return;
   window.__WebChat2Local_Interceptor_Loaded = true;
 
-  console.log("[WebChat2Local Interceptor v3.3.0] Hooking fetch + XHR in MAIN world at document_start.");
-
   const originalFetch = window.fetch;
-  const OriginalXHR = window.XMLHttpRequest; // may be undefined in non-browser test envs
-
+  const OriginalXHR = window.XMLHttpRequest;
   let activeRequestId = null;
-  let lockedStreamKey = null; // once a stream yields text, only that stream may emit
+  let lockedStreamKey = null;
+  const processors = new Map();
 
   window.addEventListener("message", (event) => {
     if (event.source !== window || !event.data) return;
     if (event.data.type === "W2L_SET_ACTIVE_REQUEST") {
       activeRequestId = event.data.request_id;
       lockedStreamKey = null;
-      processors.clear(); // new request: discard finished processors (URLs repeat across requests)
-      console.log("[WebChat2Local Interceptor] Active request set to:", activeRequestId);
+      processors.clear();
     } else if (event.data.type === "W2L_CLEAR_ACTIVE_REQUEST") {
       activeRequestId = null;
       lockedStreamKey = null;
       processors.clear();
     } else if (event.data.type === "W2L_PING_INTERCEPTOR") {
-      // Version handshake so the server logs can verify which interceptor
-      // version is actually loaded in the page.
-      postToContent({ type: "W2L_INTERCEPTOR_PONG", version: "3.3.0" });
+      postToContent({ type: "W2L_INTERCEPTOR_PONG", version: "4.0.0-gemini-only" });
     }
   });
 
   function postToContent(payload) {
     payload.source = "webchat2local-network";
-    try {
-      window.postMessage(payload, "*");
-    } catch (e) {
-      console.warn("[WebChat2Local Interceptor] postMessage failed:", e);
-    }
+    window.postMessage(payload, "*");
   }
 
-  /* ------------------------------------------------------------------ *
-   *  URL classification
-   * ------------------------------------------------------------------ */
-
-  // Noise filters: requests that stream text but are NOT the main answer.
-  const NOISE_PATTERNS = [
-    "/sentinel/", "/auth/", "/lat/", "/telemetry", "/gen_title",
-    "conversation_title", "/attribution", "/moderation", "score_stream",
-    "/react_compile", "/voice", "/transcribe", "/register", "/onboarding",
-  ];
-
-  function classifyUrl(url, method) {
-    if (!url || String(method || "GET").toUpperCase() !== "POST") return null;
-    const lower = String(url).toLowerCase();
-    if (NOISE_PATTERNS.some((p) => lower.includes(p))) return null;
-
-    const isChatGPT =
-      (lower.includes("chatgpt.com") || lower.includes("openai.com")) &&
-      (lower.includes("/conversation") ||
-        lower.includes("/backend-anon/") ||
-        lower.includes("/backend-api/"));
-
-    if (isChatGPT) return "chatgpt";
-
-    const isDeepSeek =
-      lower.includes("deepseek.com") &&
-      (lower.includes("/chat") || lower.includes("/completion") || lower.includes("/api/v0/"));
-
-    if (isDeepSeek) return "deepseek";
-
-    const isGemini =
-      lower.includes("streamgenerate") ||
-      lower.includes("batchexecute") ||
-      lower.includes("bardfrontend") ||
-      lower.includes("assistant.lamda");
-
-    if (isGemini) return "gemini";
-
-    return null;
+  function isGeminiUrl(url, method) {
+    if (String(method || "GET").toUpperCase() !== "POST") return false;
+    const lower = String(url || "").toLowerCase();
+    // Gemini's August 2026 frontend no longer exposes the old
+    // BardFrontendService/StreamGenerate URL. Chat submission is routed through
+    // the generic Wiz batchexecute dispatcher with an opaque rpcids value
+    // (for example PCck7e in a current anonymous build). Keep the legacy
+    // StreamGenerate match for older deployments, but treat batchexecute as the
+    // primary transport signal.
+    if (!["batchexecute", "streamgenerate", "bardfrontend", "assistant.lamda"].some((p) => lower.includes(p))) return false;
+    return !["/sentinel/", "/auth/", "/telemetry", "/gen_title", "/moderation", "/voice", "/transcribe"].some((p) => lower.includes(p));
   }
 
-  /* ------------------------------------------------------------------ *
-   *  ChatGPT stream processor (SSE)
-   * ------------------------------------------------------------------ */
-
-  function createChatGPTProcessor(reqId, streamKeyVal) {
-    let buffer = "";
-    let accumulated = "";
-    let finished = false;
-
-    function lock() {
-      if (!lockedStreamKey) lockedStreamKey = streamKeyVal;
-    }
-
-    function emitDone() {
-      if (finished) return;
-      finished = true;
-      if (accumulated.length > 0) {
-        postToContent({ type: "done", request_id: reqId, full_text: accumulated });
-      }
-    }
-
-    function handlePiece(text, isSnapshot) {
-      if (!text) return;
-      lock();
-
-      if (isSnapshot) {
-        // Full snapshot of the message so far -> emit only the new suffix.
-        if (text.length > accumulated.length) {
-          const delta = text.slice(accumulated.length);
-          accumulated = text;
-          postToContent({ type: "chunk", request_id: reqId, delta, accumulated });
-        }
-      } else {
-        accumulated += text;
-        postToContent({ type: "chunk", request_id: reqId, delta: text, accumulated });
-      }
-    }
-
-    /**
-     * Extracts { text, isSnapshot } from one SSE JSON payload, or null.
-     *
-     * 2025+ JSON-Patch format:
-     *   {"p": "/message/content/parts/0", "o": "append",  "v": "delta text"}  -> delta
-     *   {"p": "/message/content/parts/0", "o": "replace", "v": "full so far"} -> snapshot
-     *   {"p": "/message/reasoning_content/...", ...}                          -> SKIP (reasoning)
-     *   {"p": "/message/status" | "/conversation_id" | ..., ...}              -> SKIP (metadata)
-     *
-     * Legacy snapshot format:
-     *   {"message": {"content": {"parts": ["..."]}}}                          -> snapshot
-     *   {"v": {"message": {...}}}                                             -> snapshot (wrapped)
-     */
-    function extract(parsed) {
-      if (!parsed || typeof parsed !== "object") return null;
-
-      const p = typeof parsed.p === "string" ? parsed.p : null;
-
-      if (p) {
-        // Only accept assistant answer content; everything else is noise.
-        if (!p.includes("/content/parts")) return null;
-        if (typeof parsed.v === "string") {
-          return { text: parsed.v, isSnapshot: parsed.o === "replace" };
-        }
-        return null;
-      }
-
-      // Legacy full-snapshot
-      const c = parsed.message && parsed.message.content;
-      if (c) {
-        if (Array.isArray(c.parts)) {
-          return {
-            text: c.parts.filter((x) => typeof x === "string").join(""),
-            isSnapshot: true,
-          };
-        }
-        if (typeof c.text === "string") {
-          return { text: c.text, isSnapshot: true };
-        }
-        return null;
-      }
-
-      // Wrapped snapshot: {"v": {"message": {...}}}
-      if (parsed.v && typeof parsed.v === "object") {
-        return extract(parsed.v);
-      }
-
-      // Bare delta: {"v": "..."}
-      if (typeof parsed.v === "string") {
-        return { text: parsed.v, isSnapshot: false };
-      }
-
-      // Generic fallbacks
-      if (parsed.delta && typeof parsed.delta.content === "string") {
-        return { text: parsed.delta.content, isSnapshot: false };
-      }
-      if (parsed.delta && typeof parsed.delta.text === "string") {
-        return { text: parsed.delta.text, isSnapshot: false };
-      }
-
-      return null;
-    }
-
-    function feed(chunkText) {
-      buffer += chunkText;
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-
-        const dataStr = trimmed.slice(5).trim();
-        if (!dataStr) continue;
-
-        if (dataStr === "[DONE]") {
-          emitDone();
-          return;
-        }
-
-        try {
-          const parsed = JSON.parse(dataStr);
-          const piece = extract(parsed);
-          if (piece) handlePiece(piece.text, piece.isSnapshot);
-        } catch (e) {
-          // Keep-alive comments / non-JSON lines - ignore.
-        }
-      }
-    }
-
-    return { feed, end: emitDone };
+  function shouldCapture(url) {
+    return Boolean(activeRequestId) && (!lockedStreamKey || lockedStreamKey === url);
   }
 
-  /* ------------------------------------------------------------------ *
-   *  Gemini stream processor (Batchexecute / StreamGenerate)
-   * ------------------------------------------------------------------ */
-
+  function getProcessor(url) {
+    let proc = processors.get(url);
+    if (!proc) {
+      proc = createGeminiProcessor(activeRequestId || "req_" + Date.now(), url);
+      processors.set(url, proc);
+      if (processors.size > 8) processors.delete(processors.keys().next().value);
+    }
+    return proc;
+  }
   function collectStrings(node, out) {
     if (typeof node === "string") {
-      if (node.length === 0) return;
-      // Gemini double-encodes payloads: a string may itself contain JSON
-      // (e.g. the wrb.fr element holds '["answer text"]'). Recurse into it.
+      if (!node) return;
       const t = node.trim();
       if (t.startsWith("[") || t.startsWith("{")) {
         try {
           collectStrings(JSON.parse(t), out);
           return;
-        } catch (e) {
-          // Not valid JSON - treat as a plain string below.
-        }
+        } catch (_) {}
       }
       out.push(node);
       return;
@@ -265,6 +84,42 @@
     let extracted = "";
     let finished = false;
 
+    function parseTransportFrames(raw) {
+      // Gemini/Wiz responses are not guaranteed to be newline-delimited JSON.
+      // Depending on the deployment, batchexecute may return either JSON lines
+      // or length-prefixed frames. Normalize both into JSON roots before the
+      // answer candidate search runs.
+      const clean = raw.replace(/^\)\]\}'\s*/, "");
+      const roots = [];
+
+      for (const line of clean.split("\n")) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          roots.push(JSON.parse(t));
+          continue;
+        } catch (_) {}
+      }
+
+      let pos = 0;
+      while (pos < clean.length) {
+        while (pos < clean.length && /\s/.test(clean[pos])) pos++;
+        const start = pos;
+        while (pos < clean.length && /\d/.test(clean[pos])) pos++;
+        if (start === pos || clean[pos] !== "\n") break;
+        const length = Number(clean.slice(start, pos));
+        pos++;
+        if (!Number.isFinite(length) || length <= 0) break;
+        const frame = clean.slice(pos, pos + length);
+        if (frame.length < length) break;
+        pos += length;
+        try {
+          roots.push(JSON.parse(frame));
+        } catch (_) {}
+      }
+      return roots;
+    }
+
     function lock() {
       if (!lockedStreamKey) lockedStreamKey = streamKeyVal;
     }
@@ -272,9 +127,11 @@
     function emitDone() {
       if (finished) return;
       finished = true;
-      if (extracted.length > 0) {
-        postToContent({ type: "done", request_id: reqId, full_text: extracted });
-      }
+      // Always notify the content script, even when no answer candidate was
+      // found.  The previous conditional could leave the bridge waiting for
+      // the DOM path after a transport-only stream and made failures look like
+      // successful one-token responses.
+      postToContent({ type: "done", request_id: reqId, full_text: extracted });
     }
 
     /**
@@ -287,348 +144,189 @@
      */
     function findAnswer(raw) {
       const clean = raw.replace(/^\)\]\}'\s*/, "");
-      let best = null;
 
-      for (const line of clean.split("\n")) {
-        const t = line.trim();
-        if (!t.startsWith("[")) continue;
-
-        let outer;
-        try {
-          outer = JSON.parse(t);
-        } catch (e) {
-          continue; // partial line - more data will arrive
+      // 1. Tool calls are highest priority payload. Support streaming tool calls even before </tool_call>
+      const toolMatches = clean.match(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/gi);
+      if (toolMatches && toolMatches.length > 0) {
+        const latestTool = toolMatches[toolMatches.length - 1].trim();
+        if (latestTool.length >= "<tool_call>".length) {
+          return latestTool;
         }
+      }
 
+      function isPlausibleAnswer(s) {
+        if (!s || s.length < 4) return false;
+        const trimmed = s.trim();
+
+        // Tool calls are always valid answers
+        if (trimmed.startsWith("<tool_call")) return true;
+
+        // Reject pure standalone URLs or protocol-relative URLs
+        if (/^(?:https?:)?\/\/\S+$/i.test(trimmed)) return false;
+        if (/^\/?\/?(?:www\.)?(?:google\.com|googleusercontent\.com|gstatic\.com)\/\S+$/i.test(trimmed)) return false;
+
+        // Reject Batchexecute RPC identifiers and method tokens (e.g. af.httprm, wrb.fr, f.req, di)
+        if (/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+$/.test(trimmed)) return false;
+
+        // Reject single-word alphanumeric / hash / opaque tokens (no space, no newline, no CJK)
+        if (/^[A-Za-z0-9_.-]{1,64}$/.test(trimmed) && !/[\s\n\u3000\u3400-\u9fff\u3040-\u30ff]/.test(trimmed)) return false;
+        if (/^[A-Za-z0-9+/=_-]{16,}$/.test(trimmed) && !/[\s\n\u3000\u3400-\u9fff\u3040-\u30ff]/.test(trimmed)) return false;
+
+        // Reject Google user geolocation / IP footer metadata (e.g. 台灣彰化縣彰化市下廍里, 根據您的 IP 位址, etc.)
+        if (/^(?:台灣|臺灣|香港|澳門|日本|美國|中國|Taiwan|Hong Kong|Japan|USA)[\u4e00-\u9fa5A-Za-z0-9\s,.-]{0,35}(?:縣|市|區|里|鄉|鎮|村|路|段|District|City|County|State|Township)$/.test(trimmed)) return false;
+        if (/根據您的\s*(?:IP|位置|過去活動)|依據您的位置|Based on your (?:IP|location)|From your IP/i.test(trimmed)) return false;
+
+        // Reject pure JSON punctuation or digits only
+        if (/^[\[\]{}",:\s]*$/.test(trimmed)) return false;
+        if (/^\d+$/.test(trimmed)) return false;
+
+        // Normal prose or Markdown has spaces, newlines, CJK characters, or markdown syntax
+        return /[\s\n\u3000\u3400-\u9fff\u3040-\u30ff]/.test(trimmed) || /[.!?,:;()\[\]{}<>#*_`\-]/.test(trimmed);
+      }
+
+      let best = null;
+      for (const outer of parseTransportFrames(clean)) {
         const strings = [];
         collectStrings(outer, strings);
 
         for (const s of strings) {
+          if (!isPlausibleAnswer(s)) continue;
+
+          const hasToolCall = s.includes("<tool_call");
+          if (hasToolCall) {
+            if (!best || !best.includes("<tool_call") || s.length > best.length) {
+              best = s;
+            }
+            continue;
+          }
+
           if (extracted) {
             if (s.startsWith(extracted) && s.length > extracted.length) {
               if (!best || s.length > best.length) best = s;
-            }
-          } else {
-            if (
-              s.length > 40 &&
-              !/^[a-f0-9\-_]{8,}$/i.test(s) &&
-              !/^\d+$/.test(s) &&
-              !/^[\[\]{}",:\s]*$/.test(s)
-            ) {
+            } else if (s.length > extracted.length + 15) {
+              // Substantially longer candidate found (replace short noise prefix)
+              if (!best || s.length > best.length) best = s;
+            } else if (!isPlausibleAnswer(extracted)) {
               if (!best || s.length > best.length) best = s;
             }
+          } else {
+            if (!best || s.length > best.length) best = s;
           }
         }
       }
+
       return best;
     }
 
-    function feed(chunkText) {
-      accumulatedRaw += chunkText;
-      const found = findAnswer(accumulatedRaw);
-      if (found && found.length > extracted.length) {
-        const delta = found.slice(extracted.length);
-        extracted = found;
-        lock();
-        postToContent({ type: "chunk", request_id: reqId, delta, accumulated: extracted });
+    function findError(raw) {
+      if (!raw) return null;
+      if (raw.includes("BardErrorInfo") || raw.includes("assistant.boq.bard")) {
+        const codeMatch = raw.match(/\[\s*\"type\.googleapis\.com\/assistant\.boq\.bard\.application\.BardErrorInfo\"\s*,\s*(\d+)/i) ||
+                          raw.match(/BardErrorInfo[^\d]*(\d{3,5})/i);
+        const code = codeMatch ? codeMatch[1] : "1155";
+        return `Gemini Web 伺服器傳回錯誤 (BardErrorInfo ${code})：提示詞過長或超過 Web 端單次容量上限。`;
       }
-    }
-
-    return { feed, end: emitDone };
-  }
-
-  /* ------------------------------------------------------------------ *
-   *  DeepSeek stream processor (SSE)
-   * ------------------------------------------------------------------ */
-
-  function createDeepSeekProcessor(reqId, streamKeyVal) {
-    let buffer = "";
-    let accumulated = "";
-    let finished = false;
-
-    function lock() {
-      if (!lockedStreamKey) lockedStreamKey = streamKeyVal;
-    }
-
-    function emitDone() {
-      if (finished) return;
-      finished = true;
-      if (accumulated.length > 0) {
-        postToContent({ type: "done", request_id: reqId, full_text: accumulated });
-      }
-    }
-
-    function handlePiece(text, isSnapshot) {
-      if (!text) return;
-      lock();
-
-      if (isSnapshot) {
-        if (text.length > accumulated.length) {
-          const delta = text.slice(accumulated.length);
-          accumulated = text;
-          postToContent({ type: "chunk", request_id: reqId, delta, accumulated });
-        }
-      } else {
-        accumulated += text;
-        postToContent({ type: "chunk", request_id: reqId, delta: text, accumulated });
-      }
-    }
-
-    function extract(parsed) {
-      if (!parsed || typeof parsed !== "object") return null;
-
-      // 1. Standard OpenAI choices format (used by DeepSeek Web API)
-      if (Array.isArray(parsed.choices) && parsed.choices.length > 0) {
-        const choice = parsed.choices[0];
-        if (choice.delta) {
-          // If reasoning_content exists, skip it to avoid breaking agent tools
-          if (typeof choice.delta.content === "string") {
-            return { text: choice.delta.content, isSnapshot: false };
-          }
-          if (typeof choice.delta.text === "string") {
-            return { text: choice.delta.text, isSnapshot: false };
-          }
-        }
-        if (typeof choice.text === "string") {
-          return { text: choice.text, isSnapshot: false };
-        }
-      }
-
-      // 2. Direct string properties
-      if (typeof parsed.content === "string") {
-        return { text: parsed.content, isSnapshot: false };
-      }
-      if (typeof parsed.delta === "string") {
-        return { text: parsed.delta, isSnapshot: false };
-      }
-      if (typeof parsed.v === "string") {
-        return { text: parsed.v, isSnapshot: false };
-      }
-
       return null;
     }
 
     function feed(chunkText) {
-      buffer += chunkText;
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-
-        const dataStr = trimmed.slice(5).trim();
-        if (!dataStr) continue;
-
-        if (dataStr === "[DONE]") {
-          emitDone();
-          return;
+      accumulatedRaw += chunkText;
+      const err = findError(accumulatedRaw);
+      if (err && !finished) {
+        finished = true;
+        postToContent({ type: "stream_error", request_id: reqId, error: err });
+        return;
+      }
+      const found = findAnswer(accumulatedRaw);
+      if (found) {
+        // If candidate switched or upgraded
+        if (!found.startsWith(extracted)) {
+          extracted = "";
         }
-
-        try {
-          const parsed = JSON.parse(dataStr);
-          const piece = extract(parsed);
-          if (piece) handlePiece(piece.text, piece.isSnapshot);
-          if (parsed.choices && parsed.choices[0] && parsed.choices[0].finish_reason === "stop") {
-            emitDone();
-            return;
-          }
-        } catch (e) {}
+        if (found.length > extracted.length) {
+          const delta = found.slice(extracted.length);
+          extracted = found;
+          lock();
+          postToContent({ type: "chunk", request_id: reqId, delta, accumulated: extracted });
+        }
       }
     }
 
     return { feed, end: emitDone };
   }
-
-  /* ------------------------------------------------------------------ *
-   *  Processor registry + capture gating
-   * ------------------------------------------------------------------ */
-
-  const processors = new Map(); // streamKey -> processor
-
-  function getProcessor(kind, url) {
-    let proc = processors.get(url);
-    if (proc) return proc;
-
-    const reqId = activeRequestId || "req_" + Date.now();
-    if (kind === "gemini") {
-      proc = createGeminiProcessor(reqId, url);
-    } else if (kind === "deepseek") {
-      proc = createDeepSeekProcessor(reqId, url);
-    } else {
-      proc = createChatGPTProcessor(reqId, url);
-    }
-    processors.set(url, proc);
-
-    // Simple GC: keep at most 8 recent streams.
-    if (processors.size > 8) {
-      const oldest = processors.keys().next().value;
-      processors.delete(oldest);
-    }
-    return proc;
-  }
-
-  function shouldCapture(url) {
-    if (!activeRequestId) return false;               // no armed request -> don't capture
-    if (lockedStreamKey && lockedStreamKey !== url) return false; // locked to another stream
-    return true;
-  }
-
-  /* ------------------------------------------------------------------ *
-   *  fetch hook
-   * ------------------------------------------------------------------ */
 
   window.fetch = async function (...args) {
     let url = "";
     let method = "GET";
     try {
       if (typeof args[0] === "string") {
-        url = args[0];
-        method = (args[1] && args[1].method) || "GET";
-      } else if (args[0] instanceof Request) {
-        url = args[0].url;
-        method = args[0].method || "GET";
+        url = args[0]; method = (args[1] && args[1].method) || "GET";
       } else if (args[0] && args[0].url) {
-        url = args[0].url;
-        method = (args[1] && args[1].method) || args[0].method || "GET";
+        url = args[0].url; method = (args[1] && args[1].method) || args[0].method || "GET";
       }
-    } catch (e) {}
+    } catch (_) {}
 
     const response = await originalFetch.apply(this, args);
+    if (!isGeminiUrl(url, method) || !response?.body || !shouldCapture(url)) return response;
 
-    try {
-      const kind = classifyUrl(url, method);
-      if (kind && response && response.body) {
-        // Diagnostic: report every matching URL so the server log reveals
-        // whether the hook fires and whether gating blocked the capture.
-        postToContent({ type: "capture_attempt", url: String(url).slice(0, 200), gated: !shouldCapture(url) });
+    const rpcids = (() => {
+      try { return new URL(url, window.location.href).searchParams.get("rpcids") || ""; } catch (_) { return ""; }
+    })();
+    postToContent({
+      type: "capture_attempt",
+      url: String(url).slice(0, 200),
+      rpcids,
+      transport: String(url).toLowerCase().includes("batchexecute") ? "batchexecute" : "legacy",
+      gated: false,
+    });
+    const proc = getProcessor(url);
+    const reader = response.clone().body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    (async () => {
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          proc.feed(decoder.decode(value, { stream: true }));
+        }
+        proc.end();
+      } catch (e) {
+        console.warn("[Gemini Bridge] raw fetch capture failed", e);
+        proc.end();
       }
-      if (kind && response && response.body && shouldCapture(url)) {
-        console.log("[WebChat2Local Interceptor] Capturing raw fetch stream:", String(url).slice(0, 120));
-        const proc = getProcessor(kind, url);
-        const clone = response.clone();
-        const reader = clone.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-
-        (async () => {
-          try {
-            while (true) {
-              const { value, done } = await reader.read();
-              if (done) break;
-              proc.feed(decoder.decode(value, { stream: true }));
-            }
-            proc.end();
-          } catch (err) {
-            console.error("[WebChat2Local Interceptor] fetch stream read error:", err);
-            proc.end();
-          }
-        })();
-      }
-    } catch (e) {
-      console.warn("[WebChat2Local Interceptor] fetch hook error:", e);
-    }
-
+    })();
     return response;
   };
 
-  /* ------------------------------------------------------------------ *
-   *  XMLHttpRequest hook (fallback transport)
-   * ------------------------------------------------------------------ */
-
-  function HookedXHR() {
-    const xhr = new OriginalXHR();
-    let xhrUrl = "";
-    let xhrMethod = "GET";
-    let lastLen = 0;
-    let proc = null;
-
-    const origOpen = xhr.open;
-    xhr.open = function (method, u) {
-      xhrMethod = String(method || "GET");
-      xhrUrl = String(u || "");
-      return origOpen.apply(this, arguments);
-    };
-
-    xhr.addEventListener("readystatechange", () => {
-      try {
-        if (xhr.readyState < 3) return;
-        const kind = classifyUrl(xhrUrl, xhrMethod);
-        if (!kind || !shouldCapture(xhrUrl)) return;
-        if (!proc) proc = getProcessor(kind, xhrUrl);
-
-        const text = xhr.responseText;
-        if (typeof text !== "string") return;
-
-        if (text.length > lastLen) {
-          proc.feed(text.slice(lastLen));
-          lastLen = text.length;
-        }
-        if (xhr.readyState === 4) proc.end();
-      } catch (e) {
-        // responseText unavailable for non-text responseType - ignore.
-      }
-    });
-
-    return xhr;
-  }
-
   if (OriginalXHR) {
-    HookedXHR.prototype = OriginalXHR.prototype;
-    Object.assign(HookedXHR, {
-      UNSENT: 0,
-      OPENED: 1,
-      HEADERS_RECEIVED: 2,
-      LOADING: 3,
-      DONE: 4,
-    });
-    window.XMLHttpRequest = HookedXHR;
-  }
-
-  /* ------------------------------------------------------------------ *
-   *  WebSocket hook (some ChatGPT builds stream over a duplex WS)
-   * ------------------------------------------------------------------ */
-
-  const OriginalWS = window.WebSocket;
-  if (OriginalWS) {
-    window.WebSocket = function (...args) {
-      const ws = new OriginalWS(...args);
-      const wsUrl = String(args[0] || "");
-      let wsProc = null;
-
-      ws.addEventListener("message", (e) => {
+    function HookedXHR() {
+      const xhr = new OriginalXHR();
+      let xhrUrl = "";
+      let xhrMethod = "GET";
+      let lastLen = 0;
+      let proc = null;
+      const origOpen = xhr.open;
+      xhr.open = function (method, url) {
+        xhrMethod = String(method || "GET");
+        xhrUrl = String(url || "");
+        return origOpen.apply(this, arguments);
+      };
+      xhr.addEventListener("readystatechange", () => {
+        if (xhr.readyState < 3 || !isGeminiUrl(xhrUrl, xhrMethod) || !shouldCapture(xhrUrl)) return;
         try {
-          if (typeof e.data !== "string") return;
-          if (!activeRequestId) return;
-
-          if (!wsProc) {
-            const key = "ws:" + wsUrl;
-            if (lockedStreamKey && lockedStreamKey !== key) return;
-            wsProc = createChatGPTProcessor(activeRequestId, key);
+          if (!proc) proc = getProcessor(xhrUrl);
+          const text = xhr.responseText;
+          if (typeof text === "string" && text.length > lastLen) {
+            proc.feed(text.slice(lastLen));
+            lastLen = text.length;
           }
-
-          // WS frames are raw JSON (not SSE "data:" lines) - normalize each
-          // line into a synthetic SSE frame so the shared parser can be reused.
-          const frames = e.data.split("\n");
-          for (const f of frames) {
-            const t = f.trim();
-            if (!t) continue;
-            const payload = t.startsWith("data:") ? t.slice(5).trim() : t;
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              wsProc.feed("data: " + JSON.stringify(JSON.parse(payload)) + "\n");
-            } catch (err) {}
-          }
-        } catch (err) {}
+          if (xhr.readyState === 4) proc.end();
+        } catch (_) {}
       });
-
-      return ws;
-    };
-    window.WebSocket.prototype = OriginalWS.prototype;
-    Object.assign(window.WebSocket, {
-      CONNECTING: OriginalWS.CONNECTING,
-      OPEN: OriginalWS.OPEN,
-      CLOSING: OriginalWS.CLOSING,
-      CLOSED: OriginalWS.CLOSED,
-    });
+      return xhr;
+    }
+    HookedXHR.prototype = OriginalXHR.prototype;
+    Object.assign(HookedXHR, { UNSENT: 0, OPENED: 1, HEADERS_RECEIVED: 2, LOADING: 3, DONE: 4 });
+    window.XMLHttpRequest = HookedXHR;
   }
 })();

@@ -1,105 +1,93 @@
-# 🌐 WebChat2Local: AI Web to OpenAI-Compatible Local API Gateway
+# Gemini Web to Local Bridge (WebChat2Local)
 
-> 將 **DeepSeek (chat.deepseek.com)**、**ChatGPT (chatgpt.com)** 與 **Google Gemini (gemini.google.com)** 網頁版接出成標準 **OpenAI 相容 API 端點** (`http://127.0.0.1:8765/v1`)，供 **Cline**、**Roo Code**、**Continue**、**Codex**、**Aider** 等本地 AI 工具與開發環境直接使用！
+<p align="center">
+  <strong>Use Google Gemini Web (including 2.5 Pro & Flash Thinking) as native local models.</strong><br>
+  OpenAI Compatible API · MCP Server · Zero API Fees · Real-Time Thinking Stream
+</p>
 
----
-
-## ✨ 核心特色
-
-- 💰 **零額外 API 費用**：直接複用您在 DeepSeek、ChatGPT 或 Gemini 網頁版的大量免費或訂閱額度。
-- ⚡ **標準 OpenAI 相容介面**：支援 `POST /v1/chat/completions`（完整 SSE 即時打字串流與非串流）及 `GET /v1/models`。
-- 🔮 **多平台智慧切換**：全面支援 DeepSeek (V3/R1)、ChatGPT (gpt-4o/o1)、Google Gemini (2.5-pro/flash)。
-- 🚀 **一鍵批次檔啟動 (start_server.bat)**：雙擊即可在背景啟動伺服器並常駐於系統匣 (System Tray)，自動開啟控制面板。
-- 🛡️ **最高硬體保護原則 (SSD & RAM Safety)**：
-  - **SSD 0 磨損**：停用所有磁碟檔案日誌寫入，使用純內存循環緩衝隊列，日常 API 調用對 SSD 寫入量為 0 Byte。
-  - **RAM 定額防洩漏**：請求結束即時垃圾回收 (Instant GC)，背景常駐僅佔用 ~25-50MB 記憶體。
-- 📊 **即時現代儀表板**：瀏覽器開啟 `http://127.0.0.1:8765` 即時查看連線狀態、帳號資訊、可用模型與終端機日誌。
+<p align="center">
+  <a href="README.md">English</a> · <a href="README.zh-TW.md">繁體中文</a>
+</p>
 
 ---
 
-## 🚀 快速上手教學 (3 步驟)
+## Highlights
 
-### 步驟 1：啟動本地伺服器
+- **Native OpenAI & Responses API**: Exposes `/v1/chat/completions`, `/v1/models`, and `/v1/responses` on `http://127.0.0.1:8765/v1`.
+- **Works with All Local AI Clients**: 1-click configuration for **Cline**, **Kilo Code**, **Google Antigravity**, **Cursor**, and **Roo Code**.
+- **Real-Time Thinking Stream (`reasoning_content`)**: Full SSE streaming of Gemini 2.5 Pro / Flash Thinking reasoning process.
+- **Model Context Protocol (MCP)**: Native stdio MCP Server (`gemini-web-bridge`) with model query tools and local workspace harness tools.
+- **Zero Disk Wear & Safe In-Memory Logs**: Fast in-memory circular logs and state management.
+- **OpenDesign Dark-Theme Web Dashboard**: Live HUD status, synthetic dev chat tester, model catalog chips, and diagnostic doctor.
 
-直接雙擊執行根目錄下的 **`start_server.bat`**。
-程式將自動在背景啟動伺服器、常駐於右下角系統匣 (System Tray)，並在瀏覽器自動開啟控制面板：`http://127.0.0.1:8765`。
+---
 
-亦可在終端機中手動執行：
+## Architecture
+
+```text
+Cline / Kilo / Antigravity / Cursor / RooCode
+                    │
+                    ▼  OpenAI & Responses API (SSE / JSON)
+┌────────────────────────────────────────────────────────┐
+│  Gemini Web to Local Bridge (FastAPI Gateway :8765)    │
+│  ├─ /v1/models (Catalog & context limits)              │
+│  ├─ /v1/chat/completions (OpenAI SSE + reasoning_delta)│
+│  ├─ /v1/responses (Antigravity/Codex Responses SSE)    │
+│  ├─ Stdio MCP Server (gemini-web-bridge)               │
+│  └─ OpenDesign Dark Web Dashboard (http://127.0.0.1:8765)│
+└──────────────────────────┬─────────────────────────────┘
+                           │ WebSocket (:8765/ws)
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│  Chrome / Edge Browser Extension (Manifest V3)         │
+│  ├─ Floating HUD Status Badge                          │
+│  ├─ Input Injector & Model Switcher                    │
+│  └─ DOM Mutation Observer & Stream Extractor           │
+└──────────────────────────┬─────────────────────────────┘
+                           ▼
+             Google Gemini Web Interface (gemini.google.com)
+```
+
+---
+
+## Quick Start
+
+### 1. Start the Bridge Server
+Double-click `start_server.bat` or run:
 ```powershell
-& "C:\Users\Administrator\venv\Scripts\python.exe" desktop_app.py
+& "C:\Users\Administrator\venv\Scripts\python.exe" run_server.py start
 ```
+The server will start at `http://127.0.0.1:8765`.
+
+### 2. Load Browser Extension
+1. Open Chrome or Edge and navigate to `chrome://extensions/`
+2. Enable **Developer mode** (top right)
+3. Click **Load unpacked** and select the `extension/` folder in this repository.
+4. Navigate to [https://gemini.google.com](https://gemini.google.com).
+5. The floating HUD in the bottom right corner will turn green: `🟢 Gemini Bridge 就緒`.
+
+### 3. Setup Client Tools
+
+| Tool | Provider | Base URL | Model ID | Documentation |
+| :--- | :--- | :--- | :--- | :--- |
+| **Cline** | OpenAI Compatible | `http://127.0.0.1:8765/v1` | `gemini-web/pro` | [Guide](docs/CLINE_CONFIG.md) |
+| **Kilo Code** | OpenAI Compatible | `http://127.0.0.1:8765/v1` | `gemini-web/flash-thinking` | [Guide](docs/KILO_CONFIG.md) |
+| **Antigravity** | MCP Server | Stdio MCP | `gemini-web-bridge` | [Guide](docs/ANTIGRAVITY_INTEGRATION.md) |
+| **Cursor** | OpenAI Custom | `http://127.0.0.1:8765/v1` | `gemini-web/pro` | [Guide](docs/CURSOR_ROOCODE_CONFIG.md) |
 
 ---
 
-### 步驟 2：在瀏覽器載入擴充套件
+## Model Catalog
 
-1. 開啟 **Google Chrome** 或 **Microsoft Edge**。
-2. 網址列輸入 `chrome://extensions`（Edge 為 `edge://extensions`）。
-3. 開啟右上角的 **「開發人員模式 (Developer mode)」**。
-4. 點選 **「載入未封裝項目 (Load unpacked)」**，選擇本專案的 `extension` 資料夾。
-5. 在瀏覽器分頁中開啟以下任一支援的 AI 網頁：
-   - **DeepSeek**：[https://chat.deepseek.com](https://chat.deepseek.com)
-   - **ChatGPT**：[https://chatgpt.com](https://chatgpt.com)
-   - **Google Gemini**：[https://gemini.google.com](https://gemini.google.com)
-6. 網頁右下角會立即出現 **🟢 WebChat2Local 已連線 (就緒)** 狀態徽章！
+| Model ID | Backend Mode | Context Window | Thinking Stream | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `gemini-web/pro` | Gemini 2.5 Pro | 1,000,000 | Yes | Flagship reasoning & coding intelligence |
+| `gemini-web/flash` | Gemini 2.5 Flash | 1,000,000 | Yes | High-speed multimodal generation |
+| `gemini-web/flash-thinking` | Flash Thinking | 1,000,000 | Yes | Deep chain-of-thought stream |
+| `gemini-web/ultra` | Gemini Ultra | 1,000,000 | Yes | Advanced tier complex analysis |
 
 ---
 
-### 步驟 3：在 Cline / 本地工具中設定使用
+## License
 
-在 Cline / Roo Code / Continue 等工具中填入：
-- **API Provider**：`OpenAI Compatible`
-- **Base URL**：`http://127.0.0.1:8765/v1`
-- **API Key**：`sk-local`（任意填寫）
-- **Model**：`deepseek-chat`、`deepseek-reasoner`、`gpt-4o` 或 `gemini-2.5-pro`
-
-即可開始暢快寫 code！
-
----
-
-## 🧪 驗證與測試
-
-本專案內建完整的端到端驗證腳本：
-
-```bash
-# 1. DeepSeek 專屬功能與串流/工具呼叫驗證
-"C:\Users\Administrator\venv\Scripts\python.exe" tests\test_deepseek_mock.py
-
-# 2. 全模型 OpenAI API 標準相容性測試
-"C:\Users\Administrator\venv\Scripts\python.exe" tests\test_openai_api.py
-```
-
----
-
-## 📁 專案結構
-
-```
-WebChat2Local/
-├── server/                   # FastAPI 核心伺服器與 WebSocket 管理 (純內存日誌)
-│   ├── server.py             # 伺服器主體、路由與儀表板 HTML
-│   ├── protocol.py           # OpenAI API 資料結構
-│   └── stream_adapter.py     # SSE 串流與 XML 工具呼叫適配器
-├── extension/                # 瀏覽器擴充套件 (Manifest V3)
-│   ├── manifest.json         # 外掛設定檔 (支援 DeepSeek / ChatGPT / Gemini)
-│   ├── content.js            # 網頁端會話轉發核心
-│   ├── network_interceptor.js# 原始網絡流攔截 (SSE / JSON-Patch)
-│   ├── providers/
-│   │   ├── deepseek.js       # DeepSeek 專屬 Provider
-│   │   ├── chatgpt.js        # ChatGPT 專屬 Provider
-│   │   └── gemini.js         # Google Gemini 專屬 Provider
-│   ├── status_badge.js       # 網頁端懸浮狀態徽章
-│   ├── status_badge.css      # 狀態徽章樣式
-│   ├── popup.html            # 外掛彈窗 UI
-│   └── popup.js              # 外掛彈窗邏輯
-├── desktop_app.py            # 桌面背景伺服器 (System Tray + 0-IO 內存圖示)
-├── start_server.bat          # Windows 一鍵啟動入口批次檔
-├── start_server.ps1          # PowerShell 背景啟動腳本
-├── run_server.py             # 開發者命令列啟動入口 (CLI Runner)
-├── tests/                    # 自動化測試與驗證套件
-│   ├── test_deepseek_mock.py # DeepSeek 模擬測試
-│   └── test_openai_api.py    # OpenAI API 自動化驗證測試
-├── docs/                     # 詳細手冊與對接指南
-│   ├── MANUAL.md             # 完整使用說明書與技術手冊
-│   └── CLINE_CONFIG_GUIDE.md # 工具詳細配置指南
-└── README.md                 # 專案說明文件
-```
+MIT License.

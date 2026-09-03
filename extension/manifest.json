@@ -1,53 +1,36 @@
 {
   "manifest_version": 3,
-  "name": "WebChat2Local - AI Web to API Bridge",
-  "version": "3.3.0",
-  "description": "將 ChatGPT、Google Gemini 與 DeepSeek 網頁版接出成標準 OpenAI 相容 API，支援 100% 完整 XML 工具呼叫與高保真度 Markdown 表格。",
-  "permissions": [
-    "storage"
-  ],
+  "name": "Gemini Web to Local Bridge",
+  "version": "2.0.0",
+  "description": "Bridge Google Gemini Web chat and tool calls to local development tools.",
+  "permissions": ["activeTab", "storage", "cookies"],
   "host_permissions": [
-    "https://chatgpt.com/*",
     "https://gemini.google.com/*",
-    "https://chat.deepseek.com/*",
     "http://127.0.0.1:8765/*",
     "ws://127.0.0.1:8765/*"
   ],
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "WebChat2Local 控制台"
-  },
   "content_scripts": [
     {
-      "matches": [
-        "https://chatgpt.com/*",
-        "https://gemini.google.com/*",
-        "https://chat.deepseek.com/*"
-      ],
-      "js": [
-        "network_interceptor.js"
-      ],
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["network_interceptor.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": [
-        "https://chatgpt.com/*",
-        "https://gemini.google.com/*",
-        "https://chat.deepseek.com/*"
-      ],
+      "matches": ["https://gemini.google.com/*"],
       "js": [
-        "utils/markdown.js",
-        "providers/chatgpt.js",
-        "providers/gemini.js",
-        "providers/deepseek.js",
-        "content.js",
-        "status_badge.js"
+        "markdown_serializer.js",
+        "status_hud.js",
+        "gemini_controller.js",
+        "gemini_extractor.js",
+        "content.js"
       ],
-      "css": [
-        "status_badge.css"
-      ],
+      "css": ["status_hud.css"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Gemini Web to Local Bridge"
+  }
 }
