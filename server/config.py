@@ -50,6 +50,6 @@ MAX_IN_MEMORY_LOGS = 1000
 #   - W2L_DIRECT_FALLBACK=1  -> enable fallback (default on)
 #   - W2L_DIRECT_FALLBACK=0  -> disable fallback, require the extension
 DIRECT_FALLBACK_ENABLED = os.getenv("W2L_DIRECT_FALLBACK", "1") not in ("0", "false", "False")
-# Cookie-authenticated HTTP is the primary transport when a local cookie is
-# configured. Set W2L_DIRECT_ONLY=0 to restore browser-extension preference.
-DIRECT_ONLY = os.getenv("W2L_DIRECT_ONLY", "1") not in ("0", "false", "False")
+# Cookie-authenticated HTTP can be used as fallback or forced.
+# Default to extension-first (Web 視窗優先) to enable session-bound tab continuity.
+DIRECT_ONLY = os.getenv("W2L_DIRECT_ONLY", "0") not in ("0", "false", "False")

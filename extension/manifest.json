@@ -3,12 +3,15 @@
   "name": "Gemini Web to Local Bridge",
   "version": "2.0.0",
   "description": "Bridge Google Gemini Web chat and tool calls to local development tools.",
-  "permissions": ["activeTab", "storage", "cookies"],
+  "permissions": ["activeTab", "storage", "cookies", "alarms"],
   "host_permissions": [
     "https://gemini.google.com/*",
     "http://127.0.0.1:8765/*",
     "ws://127.0.0.1:8765/*"
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": ["https://gemini.google.com/*"],

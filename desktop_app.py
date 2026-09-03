@@ -41,6 +41,9 @@ def create_tray_icon_image():
 
 def start_uvicorn():
     """Starts Uvicorn server in daemon thread."""
+    from server.bridge.ws_hub import setup_clean_logging
+    setup_clean_logging()
+
     config = uvicorn.Config(
         "server.app:app",
         host=SERVER_HOST,

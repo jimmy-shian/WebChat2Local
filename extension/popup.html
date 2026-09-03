@@ -88,9 +88,14 @@
     <div class="title">Gemini Web to Local Bridge</div>
   </div>
   <div class="status-box">
-    <div>伺服器端點: <strong>127.0.0.1:8765</strong></div>
-    <div style="margin-top: 6px; color: #a1a1aa;">已支援 Antigravity、MCP 工具庫與 OpenAI API。</div>
+    <div>伺服器端點: <strong>127.0.0.1:8765/v1</strong></div>
+    <div style="margin-top: 6px; color: #fbbf24; font-weight: 500;">⚠️ 本地工具 (Kilo / Cline) 上限建議：</div>
+    <div style="margin-top: 3px; color: #a1a1aa; line-height: 1.4;">
+      • <strong>Context Window</strong>: 請設定為 <strong>16k ~ 32k</strong> (16,000 ~ 32,000 tokens)<br>
+      • <strong>切勿設為 128k 或無限制</strong>，避免對話過長超出 Gemini Web 網頁端輸入上限！
+    </div>
   </div>
+  <button id="btn-copy-config" class="btn" style="background: #10b981;">複製 Kilo / Cline 推薦配置</button>
   <button id="btn-capture" class="btn">抓取 Cookie 並存入本地</button>
   <a href="http://127.0.0.1:8765" target="_blank" class="btn secondary">開啟控制儀表板</a>
   <div id="msg" class="msg"></div>

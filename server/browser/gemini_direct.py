@@ -21,6 +21,8 @@ import re
 import json
 import asyncio
 import uuid
+import codecs
+import logging
 from pathlib import Path
 from typing import AsyncGenerator, Optional, Dict, Any
 
@@ -29,6 +31,8 @@ import httpx
 from server.bridge.ws_hub import TurnEvent
 from server.config import get_workspace_root
 from server.browser.cookie_auto import auto_fetch_cookies
+
+LOGGER = logging.getLogger("webchat2local.bridge")
 
 # Gemini internal RPC endpoint (BardFrontendService.StreamGenerate).
 STREAM_GENERATE_URL = (
@@ -71,6 +75,39 @@ def save_cookies(one_psid: str, one_psidts: str = "") -> bool:
         return True
     except OSError:
         return False
+
+
+def update_psidts(new_psidts: str) -> bool:
+    """
+    Persist a rotated __Secure-1PSIDTS value while keeping the stored 1PSID.
+
+    Google rotates 1PSIDTS on its own schedule. Whenever a Gemini response
+    hands us a fresh value (via Set-Cookie) we write it back so the next
+    turn automatically uses valid cookies without any manual action.
+    """
+    new_psidts = (new_psidts or "").strip()
+    if not new_psidts:
+        return False
+    current = load_cookies()
+    if current.get("1psidts") == new_psidts:
+        return False  # unchanged, nothing to persist
+    psid = current.get("1psid", "")
+    if not psid:
+        return False
+    return save_cookies(psid, new_psidts)
+
+
+def _persist_rotated_psidts(resp: "httpx.Response") -> None:
+    """Extract __Secure-1PSIDTS from Set-Cookie headers and persist it."""
+    try:
+        for raw in resp.headers.get_list("set-cookie"):
+            if "__Secure-1PSIDTS=" not in raw:
+                continue
+            value = raw.split("__Secure-1PSIDTS=", 1)[1].split(";", 1)[0].strip()
+            if value:
+                update_psidts(value)
+    except Exception:
+        pass
 
 
 def load_cookies() -> Dict[str, str]:
@@ -141,6 +178,9 @@ async def _fetch_page_metadata(client: httpx.AsyncClient, headers: Optional[Dict
         "https://gemini.google.com/app",
         headers=request_headers,
     )
+    # Google rotates __Secure-1PSIDTS on its own. Persist any fresh value so
+    # subsequent turns (and the cookie file itself) stay valid automatically.
+    _persist_rotated_psidts(resp)
     if resp.status_code != 200:
         raise GeminiDirectError(
             f"無法載入 Gemini 頁面 (HTTP {resp.status_code})。請確認 cookie 有效且未過期。"
@@ -184,19 +224,39 @@ def _build_freq(prompt: str) -> str:
 
 _MODEL_HEADERS = {
     "gemini-web/pro": '[1,null,null,null,"9d8ca3786ebdfbea",null,null,0,[4]]',
+    "gemini-web/ultra": '[1,null,null,null,"9d8ca3786ebdfbea",null,null,0,[4]]',
     "gemini-web/flash": '[1,null,null,null,"9ec249fc9ad08861",null,null,0,[4]]',
     "gemini-web/flash-thinking": '[1,null,null,null,"9ec249fc9ad08861",null,null,0,[4]]',
+    "gemini-web/auto": '[1,null,null,null,"9d8ca3786ebdfbea",null,null,0,[4]]',
 }
 
 
 def _model_headers(model: str) -> Dict[str, str]:
-    value = _MODEL_HEADERS.get(model)
+    value = _MODEL_HEADERS.get(model) or _MODEL_HEADERS.get("gemini-web/pro")
     return {"x-goog-ext-525001261-jspb": value} if value else {}
 
 
 def _extract_stream_frames(raw: str):
     """Yield JSON roots from Gemini's XSSI/length-prefixed stream."""
     clean = re.sub(r"^\)\]\}'\s*", "", raw)
+
+    # Some deployments return JSON lines (one JSON object per line).
+    # Try that first; if we get at least one valid root, treat the whole
+    # body as JSON lines and stop length-prefixed parsing.
+    json_line_roots = []
+    for line in clean.split("\n"):
+        t = line.strip()
+        if not t:
+            continue
+        try:
+            json_line_roots.append(json.loads(t))
+        except json.JSONDecodeError:
+            break
+    if json_line_roots:
+        for root in json_line_roots:
+            yield root
+        return
+
     # Some deployments return a single JSON array; handle it first.
     try:
         yield json.loads(clean)
@@ -226,51 +286,149 @@ def _extract_stream_frames(raw: str):
 
 
 def _extract_text_from_chunk(raw: str) -> str:
-    """
-    Extract the assistant text from a raw StreamGenerate response fragment.
-
-    Gemini wraps the stream in a `)]}'`-prefixed JSON array. The model text is
-    buried inside nested string fields. We do a best-effort extraction:
-      1. Strip the `)]}'` prefix.
-      2. Walk every string in the JSON tree and keep the longest plausible
-         markdown/prose candidate (reusing the same heuristics as the
-         extension's network interceptor).
-    """
-    if not raw.strip():
+    """Extract the assistant answer from Gemini's double-encoded stream."""
+    trimmed_raw = raw.strip()
+    if not trimmed_raw:
         return ""
 
-    def _collect(node, out):
+    # If raw is directly a raw text string or tool call without JSON framing
+    if trimmed_raw.startswith("<tool_call>") or trimmed_raw.startswith("<tool_call ") or (not trimmed_raw.startswith(("[", ")]}'", "{")) and "<" in trimmed_raw):
+        return trimmed_raw
+
+    def decode_nested(value):
+        """Decode JSON strings that themselves contain Gemini JSON arrays."""
+        current = value
+        for _ in range(4):
+            if not isinstance(current, str):
+                return current
+            try:
+                current = json.loads(current)
+            except (TypeError, json.JSONDecodeError):
+                return current
+        return current
+
+    def walk(node):
         if isinstance(node, str):
-            out.append(node)
+            decoded = decode_nested(node)
+            if decoded is not node:
+                yield from walk(decoded)
+            else:
+                yield node
         elif isinstance(node, list):
             for item in node:
-                _collect(item, out)
+                yield from walk(item)
         elif isinstance(node, dict):
-            for v in node.values():
-                _collect(v, out)
+            for value in node.values():
+                yield from walk(value)
 
-    strings = []
-    roots = list(_extract_stream_frames(raw))
-    for root in roots:
-        _collect(root, strings)
-    if not strings:
-        strings = re.findall(r'"((?:[^"\\]|\\.)*)"', raw)
+    def find_response_texts(node):
+        if isinstance(node, list):
+            if (
+                len(node) >= 2
+                and isinstance(node[0], str)
+                and node[0].startswith("rc_")
+                and isinstance(node[1], list)
+                and all(isinstance(x, str) for x in node[1])
+            ):
+                joined = "".join(node[1]).strip()
+                if plausible(joined, reject_opaque=False):
+                    yield joined
+            for item in node:
+                yield from find_response_texts(item)
+        elif isinstance(node, dict):
+            for item in node.values():
+                yield from find_response_texts(item)
 
-    def _plausible(s: str) -> bool:
-        if not s or len(s) < 12:
+    def plausible(s: str, reject_opaque: bool = True) -> bool:
+        s = s.strip()
+        if not s or len(s) < (12 if reject_opaque else 2):
             return False
+        if "<tool_call" in s or "<read_file" in s or "<execute_command" in s or "<write_to_file" in s:
+            return True
         if s.startswith(("http://", "https://", "//")):
             return False
-        if re.fullmatch(r"[A-Za-z0-9_-]{12,}", s):
+        if "SWML_DESCRIPTION_FROM_YOUR_PLACES_HOME" in s:
             return False
-        if re.fullmatch(r"[A-Fa-f0-9]{12,}", s):
+        if s.casefold() in {"personalize", "longer", "shorter", "try again", "expand", "compress", "refresh", "3.7 flash", "3.7 pro"}:
             return False
-        return bool(re.search(r"[\s\u3000\u3400-\u9fff\u3040-\u30ff]|[.!?,:;()\[\]{}<>#*_`\-]", s))
+        if re.fullmatch(
+            r"(?:台灣|臺灣|香港|澳門|日本|美國|中國|Taiwan|Hong Kong|Japan|USA)"
+            r"[\u4e00-\u9fffA-Za-z0-9\s,.-]{0,35}"
+            r"(?:縣|市|區|里|鄉|鎮|村|路|段|District|City|County|State|Township)",
+            s,
+        ):
+            return False
+        if reject_opaque and (
+            re.fullmatch(r"[A-Za-z0-9_-]{12,}", s)
+            or re.fullmatch(r"[A-Fa-f0-9]{12,}", s)
+        ):
+            return False
+        return True
 
+    roots = list(_extract_stream_frames(raw))
+    # Current StreamGenerate response shape places answer text at:
+    # [null, [conversation_id, response_id], ..., [[chunk_id, [TEXT], ...]]]
+    expanded = []
+    for root in roots:
+        expanded.append(root)
+        # StreamGenerate's HTTP body is a sequence of `wrb.fr` records whose
+        # third element is itself a JSON-encoded response array.
+        records = []
+        if isinstance(root, list) and root and isinstance(root[0], list):
+            records = root
+        elif isinstance(root, list) and len(root) >= 3 and root[0] == "wrb.fr":
+            records = [root]
+        for record in records:
+            if not (isinstance(record, list) and len(record) >= 3 and record[0] == "wrb.fr"):
+                continue
+            nested = decode_nested(record[2])
+            if nested is not record[2]:
+                expanded.append(nested)
+
+    # Be tolerant of partially framed/streamed bodies.  The HTTP response can
+    # contain several `wrb.fr` records before the length-prefixed parser has a
+    # complete frame; the record itself is still unambiguous JSON.
+    for match in re.finditer(r'\["wrb\.fr",null,"((?:[^"\\]|\\.)*)"\]', raw):
+        try:
+            nested = json.loads('"' + match.group(1) + '"')
+            nested = decode_nested(nested)
+            if isinstance(nested, list):
+                expanded.append(nested)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+    response_text = ""
+    for root in expanded:
+        for candidate in find_response_texts(root):
+            response_text = candidate
+        try:
+            response_groups = root[4]
+            for group in response_groups:
+                if not isinstance(group, list) or len(group) < 2:
+                    continue
+                # Actual model response chunks have an `rc_...` id.  Other
+                # strings in this array are Places/location metadata and UI
+                # labels such as "Personalize" / "Longer".
+                if not (isinstance(group[0], str) and group[0].startswith("rc_")):
+                    continue
+                texts = group[1]
+                if isinstance(texts, list) and texts and all(isinstance(x, str) for x in texts):
+                    joined = "".join(texts)
+                    if plausible(joined, reject_opaque=False):
+                        response_text = joined
+        except (IndexError, TypeError):
+            pass
+    if response_text:
+        return response_text
+
+    candidates = []
+    for root in expanded:
+        candidates.extend(walk(root))
     best = ""
-    for s in strings:
-        if _plausible(s) and len(s) > len(best):
-            best = s
+    for value in candidates:
+        value = value.strip()
+        if plausible(value) and len(value) > len(best):
+            best = value
     return best
 
 
@@ -296,9 +454,8 @@ async def stream_generate(
         )
         return
 
-    headers = {
+    base_headers = {
         "User-Agent": _DEFAULT_UA,
-        "Cookie": _cookie_header(cookies),
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "Origin": "https://gemini.google.com",
         "Referer": "https://gemini.google.com/app",
@@ -307,14 +464,33 @@ async def stream_generate(
     }
 
     async with httpx.AsyncClient(timeout=timeout_sec, follow_redirects=True) as client:
-        try:
-            meta = await _fetch_page_metadata(client, headers=headers)
-        except GeminiDirectError as e:
-            yield TurnEvent(event_type="error", error=str(e))
-            return
-        except httpx.HTTPError as e:
-            yield TurnEvent(event_type="error", error=f"連線 Gemini 失敗: {e}")
-            return
+        # Metadata fetch with one automatic retry: if the stored cookie is
+        # rejected (rotated 1PSIDTS / expired session), try re-reading cookies
+        # from the local browser profile before giving up.
+        meta = None
+        for attempt in range(2):
+            cookies = load_cookies()
+            headers = {**base_headers, "Cookie": _cookie_header(cookies)}
+            try:
+                meta = await _fetch_page_metadata(client, headers=headers)
+                break
+            except GeminiDirectError as e:
+                if attempt == 0:
+                    refreshed = False
+                    try:
+                        auto = auto_fetch_cookies()
+                        if auto.get("1psid") and auto["1psid"] != cookies.get("1psid"):
+                            save_cookies(auto["1psid"], auto.get("1psidts", ""))
+                            refreshed = True
+                    except Exception:
+                        refreshed = False
+                    if refreshed:
+                        continue
+                yield TurnEvent(event_type="error", error=str(e))
+                return
+            except httpx.HTTPError as e:
+                yield TurnEvent(event_type="error", error=f"連線 Gemini 失敗: {e}")
+                return
 
         url = STREAM_GENERATE_URL
         params = {
@@ -331,21 +507,26 @@ async def stream_generate(
 
         accumulated = ""
         last_sent = ""
+        LOGGER.info("🚀 [DIRECT SEND] 發送直接請求至 Gemini Web API | Model: %s | Prompt長度: %d", model, len(prompt))
 
         try:
             async with client.stream(
                 "POST", url, params=params, data=data,
-                headers={**headers, **_model_headers(model)},
+                headers={**base_headers, "Cookie": _cookie_header(load_cookies()),
+                         **_model_headers(model)},
             ) as resp:
                 if resp.status_code != 200:
                     body = (await resp.aread()).decode("utf-8", errors="replace")
+                    LOGGER.error("❌ [DIRECT ERROR] StreamGenerate 失敗 (HTTP %d): %s", resp.status_code, body[:200])
                     yield TurnEvent(
                         event_type="error",
                         error=f"Gemini StreamGenerate 失敗 (HTTP {resp.status_code}): {body[:300]}",
                     )
                     return
 
-                async for chunk in resp.aiter_text():
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                async for chunk_bytes in resp.aiter_bytes():
+                    chunk = decoder.decode(chunk_bytes)
                     accumulated += chunk
                     text = _extract_text_from_chunk(accumulated)
                     if text and len(text) > len(last_sent):
@@ -358,14 +539,17 @@ async def stream_generate(
                         )
 
         except httpx.HTTPError as e:
+            LOGGER.error("❌ [DIRECT ERROR] 連線中斷: %s", e)
             yield TurnEvent(event_type="error", error=f"Gemini 串流中斷: {e}")
             return
 
     if not last_sent.strip():
+        LOGGER.error("❌ [DIRECT ERROR] Gemini 直連未回傳任何文字 (Cookie 可能已過期)")
         yield TurnEvent(
             event_type="error",
             error="Gemini 直連未回傳任何文字。cookie 可能已失效，或帳號觸發了驗證。",
         )
         return
 
+    LOGGER.info("✅ [DIRECT DONE] Gemini 直連回應完成 | Model: %s | 輸出長度: %d", model, len(last_sent))
     yield TurnEvent(event_type="done", text=last_sent)

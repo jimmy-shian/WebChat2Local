@@ -1,6 +1,7 @@
 """
 FastAPI Endpoints Unit Test Suite.
-Tests /v1/models, /v1/health, /v1/status, /v1/doctor, /v1/logs, and /v1/chat/completions.
+Tests /v1/models, /v1/health, /v1/status, /v1/doctor, /v1/logs, /v1/transport,
+and /v1/chat/completions.
 """
 
 import sys
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from server.app import app
 from server.bridge.ws_hub import hub, TurnEvent
+from server.bridge import transport as transport_mod
 
 client = TestClient(app)
 
@@ -34,6 +36,8 @@ def test_get_health_endpoint():
     data = resp.json()
     assert data["status"] == "ok"
     assert "browser_connected" in data
+    assert "direct_configured" in data
+    assert "transport_mode" in data
     assert "accepting_turns" in data
 
 
@@ -42,6 +46,7 @@ def test_get_status_endpoint():
     assert resp.status_code == 200
     data = resp.json()
     assert "browser_connected" in data
+    assert "transport" in data
     assert "workspace" in data
     assert "doctor" in data
 
@@ -61,48 +66,87 @@ def test_get_logs_endpoint():
     assert "logs" in data
 
 
+def test_get_transport_endpoint():
+    resp = client.get("/v1/transport")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["mode"] in ("auto", "direct", "extension")
+    assert "valid_modes" in data
+    assert "direct_configured" in data
+    assert "browser_connected" in data
+
+
+def test_set_transport_mode():
+    original = transport_mod.get_mode()
+    try:
+        resp = client.post("/v1/transport", json={"mode": "direct"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mode"] == "direct"
+    finally:
+        transport_mod.set_mode(original)
+
+
+def test_set_transport_invalid_mode(monkeypatch):
+    def bad_set(m):
+        raise ValueError("Invalid transport mode")
+    monkeypatch.setattr("server.app.set_mode", bad_set)
+    resp = client.post("/v1/transport", json={"mode": "bogus"})
+    assert resp.status_code == 400
+
+
 def test_chat_completions_disconnected_error(monkeypatch):
-    monkeypatch.setattr("server.app.direct_is_configured", lambda: False)
+    """When no transport is available, return HTTP 503."""
+    def no_transport(prompt, model):
+        raise transport_mod.TransportUnavailable(
+            "Gemini Web 瀏覽器擴充套件未連線，且沒有可用的 cookie 直連設定。"
+        )
+    monkeypatch.setattr("server.app.resolve_turn", no_transport)
     payload = {
         "model": "gemini-web/pro",
         "messages": [{"role": "user", "content": "Hello"}],
         "stream": False,
     }
-    # When browser extension is disconnected and direct cookie is not configured, it should return HTTP 503
     resp = client.post("/v1/chat/completions", json=payload)
     assert resp.status_code == 503
-    assert "extension is not connected" in resp.json()["detail"]
+    assert "未連線" in resp.json()["detail"]
 
 
-def test_chat_completions_prefers_direct_cookie_over_browser(monkeypatch):
-    """A connected extension must not hijack cookie-only API requests."""
+def test_chat_completions_uses_unified_transport(monkeypatch):
+    """The unified dispatcher is the single source of truth for transport."""
     calls = []
 
-    async def fake_direct(prompt, model="gemini-web/pro"):
-        calls.append("direct")
-        yield TurnEvent(event_type="delta", text="direct answer", delta="direct answer")
-        yield TurnEvent(event_type="done", text="direct answer")
+    def fake_resolve(prompt, model):
+        calls.append(model)
 
-    async def fake_browser(prompt, model="gemini-web/pro"):
-        calls.append("browser")
-        yield TurnEvent(event_type="done", text="browser answer")
+        async def gen():
+            yield TurnEvent(event_type="delta", text="unified answer", delta="unified answer")
+            yield TurnEvent(event_type="done", text="unified answer")
 
-    monkeypatch.setattr("server.app.direct_is_configured", lambda: True)
-    monkeypatch.setattr("server.app.DIRECT_ONLY", True)
-    monkeypatch.setattr("server.app.stream_generate", fake_direct)
-    monkeypatch.setattr(type(hub), "is_connected", property(lambda self: True))
-    monkeypatch.setattr(hub, "execute_turn", fake_browser)
+        return gen(), "direct"
 
+    monkeypatch.setattr("server.app.resolve_turn", fake_resolve)
     resp = client.post("/v1/chat/completions", json={
         "model": "gemini-web/pro",
         "messages": [{"role": "user", "content": "Hello"}],
         "stream": False,
     })
     assert resp.status_code == 200
-    assert resp.json()["choices"][0]["message"]["content"] == "direct answer"
-    assert calls == ["direct"]
+    assert resp.json()["choices"][0]["message"]["content"] == "unified answer"
+    assert calls == ["gemini-web/pro"]
 
 
 def test_dashboard_root():
     resp = client.get("/")
     assert resp.status_code == 200
+
+
+def test_mcp_tunnel_call_endpoint():
+    resp = client.post("/v1/mcp/call", json={
+        "tool": "read_file",
+        "arguments": {"path": "README.md", "limit": 10}
+    })
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data.get("status") == "success"
+    assert "content" in data

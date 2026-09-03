@@ -8,6 +8,7 @@ import json
 import re
 import time
 import uuid
+import logging
 from typing import AsyncGenerator, Dict, Any, Optional
 
 from server.bridge.ws_hub import TurnEvent
@@ -19,6 +20,26 @@ from server.protocol import (
     FunctionCall,
 )
 from server.bridge.session_manager import SessionManager
+
+from server.bridge.prompt_compiler import STANDARD_CODING_TOOLS
+
+LOGGER = logging.getLogger("webchat2local.bridge")
+
+
+def _is_canned_error_or_refusal(text: str) -> bool:
+    """Detect Gemini Web canned error strings so they are never wrapped into attempt_completion."""
+    t = (text or "").strip().lower()
+    if not t:
+        return True
+    canned = [
+        "sorry, something went wrong",
+        "i encountered an error doing what you asked",
+        "i seem to be encountering an error",
+        "i'm having a hard time fulfilling your request",
+        "an error occurred doing what you asked",
+        "please try your request again",
+    ]
+    return any(c in t for c in canned)
 
 
 def _is_transport_noise(text: str) -> bool:
@@ -103,9 +124,17 @@ async def stream_openai_completions(
         combined = pending_tool_prefix + delta
         pending_tool_prefix = ""
 
-        marker_tokens = ["<tool_call>"]
-        if available_tool_names:
-            marker_tokens.extend(f"<{name}>" for name in available_tool_names)
+        marker_tokens = [
+            "<tool_call>", "<tool_call ", "Google Search", "```json", "```tool_code", "```python",
+            "Action:", "call:", '{"command":', '{"name":', '{"tool":', '{"path":', '{"todos":',
+            'name":', '"name":', '"command":'
+        ]
+        target_names = list(available_tool_names or [])
+        for st in STANDARD_CODING_TOOLS:
+            if st not in target_names:
+                target_names.append(st)
+        marker_tokens.extend(f"<{name}>" for name in target_names)
+        marker_tokens.extend(f"<{name} " for name in target_names)
 
         positions = [(combined.find(token), token) for token in marker_tokens if combined.find(token) >= 0]
         if positions:
@@ -222,6 +251,11 @@ async def stream_openai_completions(
             break
 
     extracted_tools = SessionManager.extract_tool_calls(full_text, available_tool_names)
+    if not extracted_tools and available_tool_names and "attempt_completion" in available_tool_names and full_text.strip() and not _is_canned_error_or_refusal(full_text):
+        # The assistant generated a valid text response to complete the task without calling attempt_completion explicitly.
+        # Auto-wrap as attempt_completion so Cline/Kilo receives the result cleanly without erroring on MODEL_NO_TOOLS_USED.
+        extracted_tools = [{"name": "attempt_completion", "arguments": {"result": full_text.strip()}}]
+
     if not extracted_tools and _is_transport_noise(full_text):
         full_text = ""
     finish_reason = "stop"
@@ -235,6 +269,8 @@ async def stream_openai_completions(
                 args_str = args_val
             else:
                 args_str = json.dumps(args_val, ensure_ascii=False)
+
+            LOGGER.info("🔧 [TOOL CALL] %s(%s)", tc["name"], args_str[:120])
 
             tool_chunk = {
                 "id": completion_id,
@@ -277,6 +313,8 @@ async def stream_openai_completions(
                 ],
             }
             yield f"data: {json.dumps(content_chunk, ensure_ascii=False)}\n\n"
+
+    LOGGER.info("✅ [DONE] 串流回應完成 | Model: %s | 輸出長度: %d | Finish: %s", model, len(full_text), finish_reason)
 
     # Final termination chunk
     final_chunk = {
@@ -360,11 +398,17 @@ async def collect_complete_response(
     full_thought = ""
 
     async for event in event_generator:
+        LOGGER.debug(
+            "COLLECT event | type=%s text_len=%d delta_len=%d thought_len=%d",
+            event.type, len(event.text or ""), len(event.delta or ""),
+            len(event.thought or ""),
+        )
         if event.type == "error":
             full_text += f"\n[Error: {event.error}]"
             break
         if event.text:
-            full_text = event.text
+            if len(event.text) >= len(full_text):
+                full_text = event.text
         elif event.delta:
             full_text += event.delta
         if event.thought:
@@ -376,20 +420,27 @@ async def collect_complete_response(
 
     # Check for tool calls
     extracted_tools = SessionManager.extract_tool_calls(full_text, available_tool_names)
+    if not extracted_tools and available_tool_names and "attempt_completion" in available_tool_names and full_text.strip() and not _is_canned_error_or_refusal(full_text):
+        extracted_tools = [{"name": "attempt_completion", "arguments": {"result": full_text.strip()}}]
+
     if not extracted_tools and _is_transport_noise(full_text):
         full_text = ""
     tool_calls = None
     if extracted_tools:
         tool_calls = []
         for tc in extracted_tools:
+            args_json = json.dumps(tc.get("arguments", {}), ensure_ascii=False) if isinstance(tc.get("arguments"), dict) else str(tc.get("arguments", "{}"))
+            LOGGER.info("🔧 [TOOL CALL] %s(%s)", tc["name"], args_json[:120])
             tool_calls.append(
                 ToolCall(
                     function=FunctionCall(
                         name=tc["name"],
-                        arguments=json.dumps(tc.get("arguments", {}), ensure_ascii=False) if isinstance(tc.get("arguments"), dict) else str(tc.get("arguments", "{}")),
+                        arguments=args_json,
                     )
                 )
             )
+
+    LOGGER.info("✅ [DONE] 回應收集完成 | Model: %s | 輸出長度: %d | Finish: %s", model, len(full_text), "tool_calls" if tool_calls else "stop")
 
     msg = ChatMessage(
         role="assistant",

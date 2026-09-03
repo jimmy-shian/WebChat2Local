@@ -11,13 +11,15 @@ from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from server.config import MODEL_CATALOG, BASE_URL, VERSION, DIRECT_FALLBACK_ENABLED, DIRECT_ONLY
+from server.config import MODEL_CATALOG, BASE_URL, VERSION
 from server.protocol import ChatCompletionRequest, ResponsesRequest
 from server.bridge.ws_hub import hub
-from server.browser.gemini_direct import (
-    is_configured as direct_is_configured,
-    stream_generate,
-    save_cookies,
+from server.bridge.transport import (
+    resolve_turn,
+    get_mode,
+    set_mode,
+    transport_snapshot,
+    TransportUnavailable,
 )
 from server.bridge.session_manager import SessionManager
 from server.bridge.stream_adapter import (
@@ -25,8 +27,18 @@ from server.bridge.stream_adapter import (
     stream_responses_api,
     collect_complete_response,
 )
+from server.browser.gemini_direct import (
+    is_configured as direct_is_configured,
+    save_cookies,
+)
 from server.doctor import run_doctor
 from server.mcp.tools_system import get_workspace_status
+from server.bridge.ws_hub import setup_clean_logging
+
+import logging
+
+LOGGER = logging.getLogger("webchat2local.bridge")
+setup_clean_logging()
 
 
 app = FastAPI(
@@ -48,6 +60,25 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 
 # ==========================================
+# Shared Turn Dispatch (single source of truth)
+# ==========================================
+
+def _dispatch_turn(prompt: str, model: str, is_new_session: bool = True):
+    """
+    Resolve a prompt into a turn generator via the unified transport
+    dispatcher. Raises HTTPException(503) when no transport is available.
+    Returns (turn_generator, transport_name).
+    """
+    try:
+        try:
+            return resolve_turn(prompt=prompt, model=model, is_new_session=is_new_session)
+        except TypeError:
+            return resolve_turn(prompt=prompt, model=model)
+    except TransportUnavailable as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+# ==========================================
 # OpenAI & Responses API Endpoints
 # ==========================================
 
@@ -65,43 +96,45 @@ async def chat_completions(req: ChatCompletionRequest):
     OpenAI-compatible Chat Completions API endpoint.
     Supports real-time SSE streaming (stream=true) with reasoning_content deltas,
     and structured JSON return (stream=false).
+
+    The transport (direct cookie HTTP vs browser extension WebSocket) is chosen
+    by the unified dispatcher; see /v1/transport for runtime selection.
     """
-    # 1. Compile multi-turn messages into Gemini prompt
-    compiled_prompt = SessionManager.compile_prompt(
+    num_msgs = len(req.messages)
+    num_tools = len(req.tools) if req.tools else 0
+    is_continuation = SessionManager.is_continuation_turn(req.messages)
+    is_new_session = not is_continuation
+
+    from server.bridge.transport import get_mode
+    current_mode = get_mode()
+    for_browser = (current_mode == "extension" or (current_mode == "auto" and hub.is_connected))
+
+    LOGGER.info(
+        "📥 [REQ] ChatCompletion 請求 | Model: %s | 訊息數: %d | 工具數: %d | Stream: %s | 會話: %s",
+        req.model, num_msgs, num_tools, req.stream, "接續輪次" if is_continuation else "全新任務",
+    )
+
+    # 1. Compile multi-turn messages into Gemini prompt (incremental for active browser session)
+    compiled = SessionManager.compile_rich_prompt(
         messages=req.messages,
         tools=req.tools,
-        enable_mcp_system=False
+        for_browser_session=for_browser,
     )
+    compiled_prompt = compiled.text
+
     tool_names = []
     for tool in req.tools or []:
         fn = tool.get("function", tool) if isinstance(tool, dict) else {}
         if isinstance(fn, dict) and fn.get("name"):
             tool_names.append(str(fn["name"]))
 
-    # 2. Dispatch turn. Cookie-authenticated HTTP is deliberately preferred so
-    # API clients never depend on a browser tab, DOM, canvas rendering, or the
-    # extension's WebSocket transport. The extension remains an opt-in fallback.
-    if DIRECT_ONLY and DIRECT_FALLBACK_ENABLED and direct_is_configured():
-        turn_generator = stream_generate(prompt=compiled_prompt, model=req.model)
-    elif hub.is_connected:
-        turn_generator = hub.execute_turn(
-            prompt=compiled_prompt,
-            model=req.model,
-        )
-    elif DIRECT_FALLBACK_ENABLED and direct_is_configured():
-        turn_generator = stream_generate(
-            prompt=compiled_prompt,
-            model=req.model,
-        )
-    else:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Gemini Web browser extension is not connected and no direct "
-                "cookie is configured. Open https://gemini.google.com in Chrome/Edge, "
-                "or set GEMINI_1PSID / create gemini_cookies.json."
-            )
-        )
+    # 2. Dispatch turn through the shared transport resolver.
+    turn_generator, transport_name = _dispatch_turn(
+        compiled_prompt,
+        req.model,
+        is_new_session=is_new_session,
+    )
+    LOGGER.info("🚀 [SEND] 發送至 Gemini | 傳輸: %s | Prompt長度: %d | 新會話: %s", transport_name, len(compiled_prompt), is_new_session)
 
     if req.stream:
         return StreamingResponse(
@@ -110,11 +143,12 @@ async def chat_completions(req: ChatCompletionRequest):
                 model=req.model,
                 available_tool_names=tool_names,
             ),
-            media_type="text/event-stream",
+            media_type="text/event-stream; charset=utf-8",
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
+                "X-W2L-Transport": transport_name,
             },
         )
     else:
@@ -147,17 +181,7 @@ async def responses_api(req: ResponsesRequest):
     else:
         prompt_text = SessionManager.compile_prompt(messages=[{"role": "user", "content": str(req.input)}], tools=req.tools)
 
-    if DIRECT_ONLY and DIRECT_FALLBACK_ENABLED and direct_is_configured():
-        turn_generator = stream_generate(prompt=prompt_text, model=req.model)
-    elif hub.is_connected:
-        turn_generator = hub.execute_turn(prompt=prompt_text, model=req.model)
-    elif DIRECT_FALLBACK_ENABLED and direct_is_configured():
-        turn_generator = stream_generate(prompt=prompt_text, model=req.model)
-    else:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemini Web browser extension is not connected and no direct cookie is configured."
-        )
+    turn_generator, transport_name = _dispatch_turn(prompt_text, req.model)
 
     return StreamingResponse(
         stream_responses_api(turn_generator, model=req.model),
@@ -165,8 +189,25 @@ async def responses_api(req: ResponsesRequest):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-W2L-Transport": transport_name,
         },
     )
+
+
+@app.post("/v1/mcp/call")
+@app.post("/v1/tunnel/call")
+async def mcp_tunnel_call(payload: dict):
+    """
+    Direct HTTP endpoint for MCP tool execution from extension or external agents.
+    """
+    tool_name = payload.get("tool") or payload.get("name") or ""
+    tool_args = payload.get("arguments") or payload.get("args") or {}
+    if not tool_name:
+        raise HTTPException(status_code=400, detail="Missing tool name.")
+
+    from server.mcp import execute_mcp_tool
+    res = execute_mcp_tool(tool_name, tool_args)
+    return res
 
 
 @app.post("/v1/cookies")
@@ -174,9 +215,15 @@ async def save_cookies_endpoint(payload: dict):
     """
     Persist the __Secure-1PSID / __Secure-1PSIDTS cookies sent by the browser
     extension, so the direct (cookie-based) Gemini path can use them.
+
+    The background service worker calls this automatically whenever Google
+    rotates the session cookie; the popup button and dashboard use the same
+    endpoint manually.
     """
     one_psid = str(payload.get("1psid", "") or payload.get("__Secure-1PSID", "")).strip()
     one_psidts = str(payload.get("1psidts", "") or payload.get("__Secure-1PSIDTS", "")).strip()
+    source = str(payload.get("source", "manual") or "manual")
+    reason = str(payload.get("reason", "") or "")
 
     if not one_psid:
         raise HTTPException(status_code=400, detail="1psid is required.")
@@ -184,7 +231,39 @@ async def save_cookies_endpoint(payload: dict):
     if not save_cookies(one_psid, one_psidts):
         raise HTTPException(status_code=500, detail="Failed to write gemini_cookies.json.")
 
+    hub.logs.log(
+        "INFO", "COOKIES",
+        f"Cookies updated (source={source}" + (f", reason={reason}" if reason else "") + ")",
+    )
+
     return {"status": "ok", "configured": direct_is_configured()}
+
+
+# ==========================================
+# Transport Mode (direct vs extension selection)
+# ==========================================
+
+@app.get("/v1/transport")
+async def get_transport():
+    """Current transport selection state for the dashboard."""
+    return transport_snapshot()
+
+
+@app.post("/v1/transport")
+async def set_transport(payload: dict):
+    """
+    Select the transport mode at runtime:
+      - "auto"      : direct-first when cookies are configured, extension fallback
+      - "direct"    : force the cookie path (no browser tab needed)
+      - "extension" : force the browser extension path (Gemini tab must be open)
+    """
+    mode = str(payload.get("mode", "") or "")
+    try:
+        set_mode(mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    hub.logs.log("INFO", "TRANSPORT", f"Transport mode set to '{mode}'")
+    return transport_snapshot()
 
 
 # ==========================================
@@ -200,6 +279,8 @@ async def health_check():
         "service": "gemini-web-to-local",
         "version": VERSION,
         "browser_connected": hub.is_connected,
+        "direct_configured": direct_is_configured(),
+        "transport_mode": get_mode(),
         "bridge_url": BASE_URL,
         "accepting_turns": not hub.is_draining,
     }
@@ -209,6 +290,7 @@ async def health_check():
 @app.get("/status")
 async def system_status():
     status = hub.get_status()
+    status["transport"] = transport_snapshot()
     status["workspace"] = get_workspace_status()
     status["doctor"] = run_doctor()
     return status
@@ -242,22 +324,17 @@ async def reset_server_state():
 
 @app.post("/v1/dev/turn")
 async def dev_synthetic_turn(payload: dict):
-    """Synthetic prompt tester for the web dashboard."""
+    """Synthetic prompt tester for the web dashboard (uses the active transport)."""
     prompt = payload.get("prompt", "")
     model = payload.get("model", "gemini-web/pro")
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required.")
 
-    if not hub.is_connected:
-        raise HTTPException(
-            status_code=503,
-            detail="Gemini Web 瀏覽器擴充套件尚未連線。請開啟 https://gemini.google.com。"
-        )
-
-    turn_gen = hub.execute_turn(prompt=prompt, model=model)
+    turn_gen, transport_name = _dispatch_turn(prompt, model)
     return StreamingResponse(
         stream_openai_completions(turn_gen, model=model),
-        media_type="text/event-stream"
+        media_type="text/event-stream",
+        headers={"X-W2L-Transport": transport_name},
     )
 
 

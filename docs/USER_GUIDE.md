@@ -50,28 +50,34 @@ start_server.bat
 
 ---
 
-## 3. 本地工具配置
+## 3. 本地工具配置 (Kilo Code / Cline / Roo Code / Cursor)
 
 所有工具共通參數：
 - **API Provider**：`OpenAI Compatible`
 - **Base URL**：`http://127.0.0.1:8765/v1`
 - **API Key**：`sk-local` (或任意非空字串)
+- **建議 Context Window (上下文長度)**：**`16,000` 或 `32,000` (16k ~ 32k tokens)**
+- **建議 Max Output Tokens**：`4,096` 或 `8,192` tokens
 
-### 3.1 Cline (VS Code)
+> [!WARNING]
+> **切勿將 Context Window 設為 128k 或無限制**！
+> 因為 Gemini Web（網頁版）單次對話輸入有字元上限。若本地工具（如 Kilo / Cline）不加限制，它會在對話累積過多歷史時發送長達十幾萬字元的龐大 Prompt，導致 Gemini Web 網頁端無法接收或被 Google 伺服器拒絕。
 
-設定頁面 (齒輪圖示) 填入上述參數，Model ID 選 `deepseek-chat`、`gpt-4o` 或 `gemini-web/pro`。
+### 3.1 Cline / Kilo Code (VS Code)
 
-或直接匯入 JSON：
+設定頁面 (齒輪圖示) 填入上述參數，Model ID 選 `gemini-web/ultra` 或 `gemini-web/pro`。
+
+建議設定 JSON（複製直接匯入）：
 ```json
 {
   "apiProvider": "openai",
   "openAiBaseUrl": "http://127.0.0.1:8765/v1",
   "openAiApiKey": "sk-local",
-  "openAiModelId": "gemini-web/pro",
+  "openAiModelId": "gemini-web/ultra",
   "customModelInfo": {
     "supportsPromptCache": false,
-    "maxTokens": 32768,
-    "contextWindow": 1000000,
+    "maxTokens": 4096,
+    "contextWindow": 32768,
     "supportsThinking": true
   }
 }
@@ -79,7 +85,7 @@ start_server.bat
 
 ### 3.2 Roo Code
 
-設定面板 → Provider 選 `OpenAI Compatible` → 填入 Base URL、API Key、Model ID → 勾選 Supports Streaming。
+設定面板 → Provider 選 `OpenAI Compatible` → 填入 Base URL、API Key、Model ID (`gemini-web/ultra`) → Context Window 設為 `32768` → 勾選 Supports Streaming。
 
 ### 3.3 Cursor
 

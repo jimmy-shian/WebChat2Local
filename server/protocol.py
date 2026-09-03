@@ -15,7 +15,7 @@ import uuid
 
 class FunctionCall(BaseModel):
     name: str
-    arguments: str
+    arguments: Union[str, Dict[str, Any], Any] = "{}"
 
 
 class ToolCall(BaseModel):
@@ -27,11 +27,11 @@ class ToolCall(BaseModel):
 class ChatMessage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    role: str  # "system", "user", "assistant", "tool", "developer"
+    role: str  # "system", "user", "assistant", "tool", "function", "developer"
     content: Optional[Union[str, List[Any], Dict[str, Any]]] = ""
     name: Optional[str] = None
     reasoning_content: Optional[str] = None
-    tool_calls: Optional[List[ToolCall]] = None
+    tool_calls: Optional[List[Union[ToolCall, Dict[str, Any]]]] = None
     tool_call_id: Optional[str] = None
 
 

@@ -1,6 +1,31 @@
 document.addEventListener("DOMContentLoaded", () => {
   const btnCapture = document.getElementById("btn-capture");
+  const btnCopyConfig = document.getElementById("btn-copy-config");
   const msg = document.getElementById("msg");
+
+  if (btnCopyConfig) {
+    btnCopyConfig.addEventListener("click", () => {
+      const configJson = {
+        apiProvider: "openai",
+        openAiBaseUrl: "http://127.0.0.1:8765/v1",
+        openAiApiKey: "sk-local",
+        openAiModelId: "gemini-web/ultra",
+        customModelInfo: {
+          supportsPromptCache: false,
+          maxTokens: 4096,
+          contextWindow: 32768,
+          supportsThinking: true
+        }
+      };
+      navigator.clipboard.writeText(JSON.stringify(configJson, null, 2)).then(() => {
+        msg.textContent = "✅ 已複製 Kilo / Cline 配置 (ContextWindow: 32k)！";
+        msg.className = "msg ok";
+      }).catch(() => {
+        msg.textContent = "複製失敗，請手動設定 Context Window 為 32k。";
+        msg.className = "msg err";
+      });
+    });
+  }
 
   if (btnCapture) {
     btnCapture.addEventListener("click", async () => {
@@ -8,7 +33,6 @@ document.addEventListener("DOMContentLoaded", () => {
       msg.textContent = "正在讀取 Cookie...";
       msg.className = "msg";
       try {
-        // 用 chrome.cookies API 讀取 __Secure-1PSID / __Secure-1PSIDTS
         const onePsid = await getCookie("__Secure-1PSID");
         const onePsidts = await getCookie("__Secure-1PSIDTS");
 

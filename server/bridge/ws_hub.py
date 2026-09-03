@@ -25,6 +25,37 @@ if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "")
 LOGGER.setLevel(logging.INFO)
 
 
+class EndpointFilter(logging.Filter):
+    """Filters out high-frequency polling requests from console logs."""
+    EXCLUDE_PATHS = (
+        "/v1/status", "/status",
+        "/v1/logs", "/logs",
+        "/v1/transport",
+        "/v1/health", "/health", "/healthz",
+        "/static/", "/favicon.ico",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        if "GET " in msg and any(path in msg for path in self.EXCLUDE_PATHS):
+            return False
+        return True
+
+
+def setup_clean_logging():
+    """Configures clean logging and silences polling noise."""
+    uvicorn_access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, EndpointFilter) for f in uvicorn_access.filters):
+        uvicorn_access.addFilter(EndpointFilter())
+
+    root_logger = logging.getLogger()
+    if not any(isinstance(f, EndpointFilter) for f in root_logger.filters):
+        root_logger.addFilter(EndpointFilter())
+
+
+setup_clean_logging()
+
+
 class TurnEvent:
     def __init__(
         self,
@@ -105,14 +136,14 @@ class BrowserWebSocketHub:
         self.browser_info["connected"] = True
         self.browser_info["last_seen"] = time.time()
         self.logs.log("INFO", "HUB", "Gemini Web extension connected via WebSocket.")
-        LOGGER.info("WS connected | active_tabs=%d", len(self.active_connections))
+        LOGGER.info("🟢 [WS] 擴充套件已連線 (現有標籤頁數: %d)", len(self.active_connections))
 
     def unregister_connection(self, websocket: WebSocket):
         self.active_connections.discard(websocket)
         if not self.active_connections:
             self.browser_info["connected"] = False
             self.logs.log("WARN", "HUB", "Gemini Web extension disconnected (0 tabs active).")
-        LOGGER.info("WS disconnected | active_tabs=%d", len(self.active_connections))
+        LOGGER.info("🔴 [WS] 擴充套件中斷 (剩餘標籤頁數: %d)", len(self.active_connections))
 
     async def broadcast(self, message: Dict[str, Any]):
         """Broadcasts a JSON message to all connected extension tabs."""
@@ -131,7 +162,7 @@ class BrowserWebSocketHub:
         msg_type = data.get("type")
         turn_id = data.get("turn_id")
         self.browser_info["last_seen"] = time.time()
-        LOGGER.info(
+        LOGGER.debug(
             "RX browser | type=%s turn=%s text_len=%d delta_len=%d thought_len=%d model=%s keys=%s",
             msg_type, turn_id or "-", len(str(data.get("text", ""))),
             len(str(data.get("delta", ""))), len(str(data.get("thought", ""))),
@@ -150,6 +181,22 @@ class BrowserWebSocketHub:
             return
 
         if msg_type == "pong":
+            return
+
+        if msg_type == "call_mcp_tool":
+            call_id = data.get("call_id") or uuid.uuid4().hex[:8]
+            tool_name = data.get("tool") or data.get("name") or ""
+            tool_args = data.get("arguments") or {}
+            LOGGER.info("🔧 [TUNNEL MCP] 收到瀏覽器擴充套件調用本地工具: %s(%s)", tool_name, str(tool_args)[:100])
+            from server.mcp import execute_mcp_tool
+            res = execute_mcp_tool(tool_name, tool_args)
+            await self.broadcast({
+                "type": "mcp_tool_result",
+                "call_id": call_id,
+                "tool": tool_name,
+                "result": res,
+            })
+            LOGGER.info("✅ [TUNNEL MCP] 本地工具執行完成: %s | Status: %s", tool_name, res.get("status", "done"))
             return
 
         # Handle active turn streaming events
@@ -195,6 +242,7 @@ class BrowserWebSocketHub:
         prompt: str,
         model: str = "gemini-web/pro",
         timeout_sec: int = DEFAULT_BROWSER_TIMEOUT,
+        is_new_session: bool = True,
     ) -> AsyncGenerator[TurnEvent, None]:
         """
         Executes a prompt turn on Gemini Web and streams back incremental TurnEvents.
@@ -220,16 +268,18 @@ class BrowserWebSocketHub:
         async with self.global_turn_lock:
             self.active_turn_id = turn_id
             self.turn_queues[turn_id] = queue
-            self.logs.log("INFO", "TURN", f"Starting turn {turn_id} (model={model}, prompt_len={len(prompt)})")
-            LOGGER.info("TX browser | type=submit_prompt turn=%s model=%s prompt_len=%d", turn_id, model, len(prompt))
+            session_tag = "新會話" if is_new_session else "接續會話"
+            self.logs.log("INFO", "TURN", f"Starting turn {turn_id} ({session_tag}, model={model}, prompt_len={len(prompt)})")
+            LOGGER.info("🚀 [WS SEND] 發送至擴充套件 | Turn: %s (%s) | Model: %s | Prompt長度: %d", turn_id, session_tag, model, len(prompt))
 
             try:
-                # Send prompt to extension
+                # Send prompt and session status to extension
                 await self.broadcast({
                     "type": "submit_prompt",
                     "turn_id": turn_id,
                     "prompt": prompt,
                     "model": model,
+                    "is_new_session": is_new_session,
                 })
 
                 start_time = time.time()
@@ -262,12 +312,12 @@ class BrowserWebSocketHub:
                         if event.thought:
                             accumulated_thought = event.thought
                         yield event
-                        LOGGER.info("TURN done | turn=%s response_len=%d elapsed_ms=%d", turn_id, len(accumulated_text), int((time.time() - start_time) * 1000))
+                        LOGGER.info("✅ [WS DONE] 擴充套件回應完成 | Turn: %s | 輸出長度: %d | 耗時: %.2fs", turn_id, len(accumulated_text), (time.time() - start_time))
                         break
 
                     elif event.type == "error":
                         yield event
-                        LOGGER.error("TURN error | turn=%s error=%s elapsed_ms=%d", turn_id, event.error, int((time.time() - start_time) * 1000))
+                        LOGGER.error("❌ [WS ERROR] 擴充套件回應失敗 | Turn: %s | 錯誤: %s | 耗時: %.2fs", turn_id, event.error, (time.time() - start_time))
                         break
 
             finally:

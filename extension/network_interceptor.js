@@ -269,6 +269,16 @@
     const response = await originalFetch.apply(this, args);
     if (!isGeminiUrl(url, method) || !response?.body || !shouldCapture(url)) return response;
 
+    // Skip clearly binary responses (images, audio, video, protobuf, gzip
+    // blobs) so the UTF-8 decoder never turns binary payloads into
+    // replacement-character noise that the answer parser mistakes for text.
+    const contentType = (() => {
+      try { return response.headers.get("content-type") || ""; } catch (_) { return ""; }
+    })();
+    if (/image\/|audio\/|video\/|application\/octet-stream|application\/x-protobuf|application\/grpc|application\/zip|application\/gzip/i.test(contentType)) {
+      return response;
+    }
+
     const rpcids = (() => {
       try { return new URL(url, window.location.href).searchParams.get("rpcids") || ""; } catch (_) { return ""; }
     })();

@@ -28,6 +28,9 @@ console = Console()
 def cmd_start(args):
     """Starts the Gemini Web to Local Bridge FastAPI server."""
     import uvicorn
+    from server.bridge.ws_hub import setup_clean_logging
+    setup_clean_logging()
+
     host = args.host or SERVER_HOST
     port = args.port or SERVER_PORT
     console.print(Panel.fit(

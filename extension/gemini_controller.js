@@ -432,10 +432,7 @@ const GeminiController = {
     // 1. Wait for screen / DOM / Angular state to be completely idle & ready
     await this.waitForIdleAndReady(6000);
 
-    // 2. Ensure temporary chat mode without toggling off
-    await this.ensureTemporaryChat();
-
-    // 3. Inject text safely and non-blockingly
+    // 2. Inject text safely and non-blockingly
     const editor = this.setInputText(promptText);
 
     // 4. Wait for Angular to activate the send button and click it

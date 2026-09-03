@@ -14,8 +14,8 @@ class GeminiWebModelRoute(BaseModel):
     display_name: str
     backend_mode: str  # "flash", "pro", "thinking", "ultra", "auto"
     description: str
-    context_window: int = 1_048_576  # 1M tokens
-    max_output_tokens: int = 32_768
+    context_window: int = 32_768  # 32K token safe limit for Gemini Web browser transport
+    max_output_tokens: int = 8_192
     compaction_reserve_ratio: float = 0.10
     supports_thinking: bool = True
     supports_tools: bool = True
@@ -30,9 +30,9 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
         slug="gemini-web/flash",
         display_name="Gemini Web - 2.5 Flash",
         backend_mode="flash",
-        description="High-speed multimodal Gemini 2.5 Flash model with 1M context window and thinking capability.",
-        context_window=1_048_576,
-        max_output_tokens=32_768,
+        description="High-speed multimodal Gemini 2.5 Flash model with 32K context window and thinking capability.",
+        context_window=32_768,
+        max_output_tokens=8_192,
         supports_thinking=True,
         is_default=False,
     ),
@@ -41,9 +41,9 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
         slug="gemini-web/pro",
         display_name="Gemini Web - 2.5 Pro",
         backend_mode="pro",
-        description="Flagship Gemini 2.5 Pro reasoning model with 1M context window, deep coding intelligence, and rich reasoning.",
-        context_window=1_048_576,
-        max_output_tokens=32_768,
+        description="Flagship Gemini 2.5 Pro reasoning model with 32K context window, deep coding intelligence, and rich reasoning.",
+        context_window=32_768,
+        max_output_tokens=8_192,
         supports_thinking=True,
         is_default=True,
     ),
@@ -53,8 +53,8 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
         display_name="Gemini Web - Flash Thinking",
         backend_mode="thinking",
         description="Gemini Flash Thinking experimental model with real-time reasoning_content deltas.",
-        context_window=1_048_576,
-        max_output_tokens=32_768,
+        context_window=32_768,
+        max_output_tokens=8_192,
         supports_thinking=True,
         is_default=False,
     ),
@@ -64,8 +64,8 @@ AVAILABLE_GEMINI_WEB_ROUTES: List[GeminiWebModelRoute] = [
         display_name="Gemini Web - Advanced Ultra",
         backend_mode="ultra",
         description="Gemini Advanced / Ultra tier for complex tasks.",
-        context_window=1_048_576,
-        max_output_tokens=32_768,
+        context_window=32_768,
+        max_output_tokens=8_192,
         supports_thinking=True,
         is_default=False,
     ),

@@ -15,6 +15,18 @@ class SessionManager:
     """
 
     @classmethod
+    def is_continuation_turn(cls, messages: List[ChatMessage]) -> bool:
+        """
+        Determines if the current request represents a continuation of an ongoing conversation
+        (e.g. tool result return or multi-turn follow-up) rather than a brand-new task.
+        """
+        if not messages or len(messages) < 2:
+            return False
+        has_prior_assistant = any((m.role or "").lower() == "assistant" for m in messages[:-1])
+        last_is_tool_or_user = (messages[-1].role or "").lower() in ("tool", "function", "user")
+        return has_prior_assistant and last_is_tool_or_user
+
+    @classmethod
     def compile_prompt(
         cls,
         messages: List[ChatMessage],
@@ -38,8 +50,19 @@ class SessionManager:
         messages: List[ChatMessage],
         tools: Optional[List[Dict[str, Any]]] = None,
         system_instruction: Optional[str] = None,
+        for_browser_session: bool = False,
     ) -> CompiledGeminiPrompt:
-        """Returns the compiled text prompt used for the Gemini Web turn."""
+        """
+        Returns the compiled text prompt used for the Gemini Web turn.
+        When for_browser_session is True and the request is a continuation turn,
+        compiles only the incremental continuation turn to be appended into the
+        existing Gemini Web chat thread.
+        """
+        if for_browser_session and cls.is_continuation_turn(messages):
+            return GeminiPromptCompiler.compile_continuation_turn(
+                messages=messages,
+                tools=tools,
+            )
         return GeminiPromptCompiler.compile(
             messages=messages,
             tools=tools,
