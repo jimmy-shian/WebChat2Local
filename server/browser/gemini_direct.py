@@ -132,13 +132,15 @@ class DirectGeminiEngine:
             if not cookies.get("1psid"):
                 # Try auto-extracting from browser
                 try:
-                    from gemini_webapi.utils.load_browser_cookies import load_browser_cookies
-                    for b in ["chrome", "edge"]:
-                        b_cookies = load_browser_cookies(browser=b)
-                        if b_cookies.get("__Secure-1PSID"):
-                            save_cookies(b_cookies["__Secure-1PSID"], b_cookies.get("__Secure-1PSIDTS", ""))
+                    from gemini_webapi.utils import load_browser_cookies
+                    b_dict = load_browser_cookies(domain_name=".google.com")
+                    for b_name, c_list in b_dict.items():
+                        psid = next((c["value"] for c in c_list if c.get("name") == "__Secure-1PSID"), "")
+                        psidts = next((c["value"] for c in c_list if c.get("name") == "__Secure-1PSIDTS"), "")
+                        if psid:
+                            save_cookies(psid, psidts)
                             cookies = load_cookies()
-                            LOGGER.info("🔑 [DIRECT] 成功從 %s 自動提取 Gemini Cookies！", b.capitalize())
+                            LOGGER.info("🔑 [DIRECT] 成功從 %s 自動提取 Gemini Cookies！", b_name.capitalize())
                             break
                 except Exception as e:
                     LOGGER.debug("自動從瀏覽器提取 Cookie 失敗: %s", e)
