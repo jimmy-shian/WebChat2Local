@@ -1,5 +1,5 @@
 const assert = require("assert");
-const GeminiController = require("../extension/gemini_controller.js");
+const GeminiController = require("../gemini_controller.js");
 
 // Minimal DOM Element Mock
 class MockElement {

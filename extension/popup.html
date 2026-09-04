@@ -89,15 +89,17 @@
   </div>
   <div class="status-box">
     <div>伺服器端點: <strong>127.0.0.1:8765/v1</strong></div>
-    <div style="margin-top: 6px; color: #fbbf24; font-weight: 500;">⚠️ 本地工具 (Kilo / Cline) 上限建議：</div>
+    <div style="margin-top: 6px; color: #38bdf8; font-weight: 500;">💡 快速指引：</div>
     <div style="margin-top: 3px; color: #a1a1aa; line-height: 1.4;">
-      • <strong>Context Window</strong>: 請設定為 <strong>16k ~ 32k</strong> (16,000 ~ 32,000 tokens)<br>
-      • <strong>切勿設為 128k 或無限制</strong>，避免對話過長超出 Gemini Web 網頁端輸入上限！
+      • <strong>MCP 模式</strong>：免啟動伺服器，點擊下方「複製 Cookie」或「下載 JSON」即可。<br>
+      • <strong>API 模式</strong>：執行 <code>start_server.bat</code> 啟動本地端點 (8765)。
     </div>
   </div>
-  <button id="btn-copy-config" class="btn" style="background: #10b981;">複製 Kilo / Cline 推薦配置</button>
-  <button id="btn-capture" class="btn">抓取 Cookie 並存入本地</button>
-  <a href="http://127.0.0.1:8765" target="_blank" class="btn secondary">開啟控制儀表板</a>
+  <button id="btn-capture" class="btn">⚡ 一鍵抓取 Cookie (自動同步/複製)</button>
+  <button id="btn-download-cookie" class="btn secondary">📥 下載 gemini_cookies.json 檔案</button>
+  <button id="btn-copy-cookie" class="btn secondary">📋 複製 Cookie JSON 到剪貼簿</button>
+  <button id="btn-copy-config" class="btn" style="background: #059669;">📋 複製 Kilo / Cline 推薦配置</button>
+  <a href="http://127.0.0.1:8765" target="_blank" class="btn secondary" style="font-size: 11px; padding: 6px 0;">開啟控制儀表板 (需啟動伺服器)</a>
   <div id="msg" class="msg"></div>
   <script src="popup.js"></script>
 </body>

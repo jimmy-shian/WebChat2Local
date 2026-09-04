@@ -22,12 +22,34 @@ const MIN_PUSH_INTERVAL_MS = 5000; // debounce onChanged bursts
 let lastPushAt = 0;
 let pendingPush = null;
 
-function getCookie(name) {
-  return new Promise((resolve) => {
+async function getCookie(name) {
+  // 1. 優先嘗試 gemini.google.com
+  let val = await new Promise((resolve) => {
     chrome.cookies.get({ url: COOKIE_URL, name }, (cookie) =>
       resolve(cookie ? cookie.value : "")
     );
   });
+  if (val) return val;
+
+  // 2. 備用嘗試 google.com
+  val = await new Promise((resolve) => {
+    chrome.cookies.get({ url: "https://google.com", name }, (cookie) =>
+      resolve(cookie ? cookie.value : "")
+    );
+  });
+  if (val) return val;
+
+  // 3. 通用 domain 比對
+  val = await new Promise((resolve) => {
+    chrome.cookies.getAll({ name }, (cookies) => {
+      if (chrome.runtime.lastError || !cookies || cookies.length === 0) {
+        return resolve("");
+      }
+      const match = cookies.find((c) => c.domain && c.domain.includes("google.com"));
+      resolve(match ? match.value : cookies[0].value);
+    });
+  });
+  return val || "";
 }
 
 async function pushCookies(reason) {
