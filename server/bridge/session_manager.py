@@ -51,14 +51,16 @@ class SessionManager:
         tools: Optional[List[Dict[str, Any]]] = None,
         system_instruction: Optional[str] = None,
         for_browser_session: bool = False,
+        for_stateful_session: bool = False,
     ) -> CompiledGeminiPrompt:
         """
         Returns the compiled text prompt used for the Gemini Web turn.
-        When for_browser_session is True and the request is a continuation turn,
-        compiles only the incremental continuation turn to be appended into the
-        existing Gemini Web chat thread.
+        When for_browser_session or for_stateful_session is True and the request is a
+        continuation turn, compiles only the incremental continuation turn to be
+        appended into the existing Gemini Web chat thread.
         """
-        if for_browser_session and cls.is_continuation_turn(messages):
+        is_stateful = for_browser_session or for_stateful_session
+        if is_stateful and cls.is_continuation_turn(messages):
             return GeminiPromptCompiler.compile_continuation_turn(
                 messages=messages,
                 tools=tools,
@@ -70,8 +72,35 @@ class SessionManager:
         )
 
     @staticmethod
+    def get_conversation_fingerprint(messages: List[ChatMessage]) -> str:
+        """
+        Extracts a stable conversation fingerprint across multi-turn requests
+        from the initial user task and system instructions.
+        """
+        import hashlib
+        if not messages:
+            return "session_empty"
+
+        sys_parts = []
+        user_parts = []
+        for m in messages:
+            role = (m.role or "").lower()
+            content_str = str(m.content or "")
+            if role in ("system", "developer") and not sys_parts:
+                sys_parts.append(content_str[:500])
+            elif role == "user" and not user_parts:
+                user_parts.append(content_str[:1000])
+
+        raw_key = f"{''.join(sys_parts)}||{''.join(user_parts)}"
+        if not raw_key.strip(" |"):
+            raw_key = str(messages[0].content or "")[:500]
+
+        return hashlib.sha256(raw_key.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+    @staticmethod
     def extract_tool_calls(
         text: str,
         available_tool_names: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         return GeminiPromptCompiler.extract_tool_calls(text, available_tool_names)
+

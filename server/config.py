@@ -44,12 +44,10 @@ DEFAULT_COMMAND_TIMEOUT = int(os.getenv("W2L_COMMAND_TIMEOUT", "60"))
 WEBSOCKET_HEARTBEAT_INTERVAL = 10
 MAX_IN_MEMORY_LOGS = 1000
 
-# Direct (cookie-based) Gemini access. When the browser extension is not
-# connected, the bridge can fall back to calling gemini.google.com directly
-# using the user's __Secure-1PSID session cookie.
+# Direct (cookie-based) Gemini access.
 #   - W2L_DIRECT_FALLBACK=1  -> enable fallback (default on)
 #   - W2L_DIRECT_FALLBACK=0  -> disable fallback, require the extension
 DIRECT_FALLBACK_ENABLED = os.getenv("W2L_DIRECT_FALLBACK", "1") not in ("0", "false", "False")
-# Cookie-authenticated HTTP can be used as fallback or forced.
-# Default to extension-first (Web 視窗優先) to enable session-bound tab continuity.
+# Default to direct connection mode (免開分頁，以 gemini_webapi 直連為核心預設)
 DIRECT_ONLY = os.getenv("W2L_DIRECT_ONLY", "0") not in ("0", "false", "False")
+

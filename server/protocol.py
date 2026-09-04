@@ -122,3 +122,61 @@ class WSOutgoingMessage(BaseModel):
     prompt: Optional[str] = None
     model: Optional[str] = None
     options: Optional[Dict[str, Any]] = None
+
+
+# ==========================================
+# Multimodal Helper Utilities
+# ==========================================
+
+def extract_images_from_messages(messages: List[ChatMessage]) -> List[Any]:
+    """
+    Extracts base64 or remote URL images from ChatMessage content lists.
+    Returns a list of io.BytesIO objects with a .name attribute suitable for gemini_webapi file upload.
+    """
+    import base64
+    import io
+
+    files: List[Any] = []
+    img_idx = 0
+    for msg in messages:
+        if isinstance(msg.content, list):
+            for part in msg.content:
+                if isinstance(part, dict):
+                    p_type = part.get("type", "")
+                    if p_type in ("image_url", "image"):
+                        img_data = part.get("image_url", {})
+                        url = img_data.get("url", "") if isinstance(img_data, dict) else str(img_data or "")
+                        if not url and "url" in part:
+                            url = str(part.get("url", ""))
+
+                        if url.startswith("data:image/"):
+                            try:
+                                header, encoded = url.split(",", 1)
+                                ext = ".png"
+                                if "image/jpeg" in header or "image/jpg" in header:
+                                    ext = ".jpg"
+                                elif "image/webp" in header:
+                                    ext = ".webp"
+                                elif "image/gif" in header:
+                                    ext = ".gif"
+
+                                raw_bytes = base64.b64decode(encoded)
+                                buf = io.BytesIO(raw_bytes)
+                                buf.name = f"input_image_{img_idx}{ext}"
+                                files.append(buf)
+                                img_idx += 1
+                            except Exception:
+                                pass
+                        elif url.startswith(("http://", "https://")):
+                            try:
+                                import httpx
+                                resp = httpx.get(url, timeout=15)
+                                if resp.status_code == 200:
+                                    buf = io.BytesIO(resp.content)
+                                    buf.name = f"input_image_{img_idx}.png"
+                                    files.append(buf)
+                                    img_idx += 1
+                            except Exception:
+                                pass
+    return files
+

@@ -251,10 +251,6 @@ async def stream_openai_completions(
             break
 
     extracted_tools = SessionManager.extract_tool_calls(full_text, available_tool_names)
-    if not extracted_tools and available_tool_names and "attempt_completion" in available_tool_names and full_text.strip() and not _is_canned_error_or_refusal(full_text):
-        # The assistant generated a valid text response to complete the task without calling attempt_completion explicitly.
-        # Auto-wrap as attempt_completion so Cline/Kilo receives the result cleanly without erroring on MODEL_NO_TOOLS_USED.
-        extracted_tools = [{"name": "attempt_completion", "arguments": {"result": full_text.strip()}}]
 
     if not extracted_tools and _is_transport_noise(full_text):
         full_text = ""
@@ -312,12 +308,30 @@ async def stream_openai_completions(
                     }
                 ],
             }
-            yield f"data: {json.dumps(content_chunk, ensure_ascii=False)}\n\n"
+    # Guarantee: never end with both content and tool_calls empty
+    if finish_reason == "stop" and not emitted_text.strip():
+        fallback_msg = full_text.strip() if full_text.strip() else "I have received your request and am ready to assist. Please let me know how you'd like to proceed."
+        content_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created_ts,
+            "model": model,
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": fallback_msg},
+                    "finish_reason": None,
+                }
+            ],
+        }
+        yield f"data: {json.dumps(content_chunk, ensure_ascii=False)}\n\n"
+        emitted_text += fallback_msg
 
     LOGGER.info("✅ [DONE] 串流回應完成 | Model: %s | 輸出長度: %d | Finish: %s", model, len(full_text), finish_reason)
 
     # Final termination chunk
     final_chunk = {
+
         "id": completion_id,
         "object": "chat.completion.chunk",
         "created": created_ts,
@@ -420,8 +434,7 @@ async def collect_complete_response(
 
     # Check for tool calls
     extracted_tools = SessionManager.extract_tool_calls(full_text, available_tool_names)
-    if not extracted_tools and available_tool_names and "attempt_completion" in available_tool_names and full_text.strip() and not _is_canned_error_or_refusal(full_text):
-        extracted_tools = [{"name": "attempt_completion", "arguments": {"result": full_text.strip()}}]
+
 
     if not extracted_tools and _is_transport_noise(full_text):
         full_text = ""
@@ -440,7 +453,11 @@ async def collect_complete_response(
                 )
             )
 
+    if not tool_calls and not full_text.strip():
+        full_text = "I have received your request and am ready to assist. Please let me know how you'd like to proceed."
+
     LOGGER.info("✅ [DONE] 回應收集完成 | Model: %s | 輸出長度: %d | Finish: %s", model, len(full_text), "tool_calls" if tool_calls else "stop")
+
 
     msg = ChatMessage(
         role="assistant",

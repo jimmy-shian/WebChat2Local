@@ -6,6 +6,7 @@ Modeled after codex-chatgpt-web/src/server.ts.
 
 import os
 from pathlib import Path
+from typing import Optional, List, Any, Dict
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +31,7 @@ from server.bridge.stream_adapter import (
 from server.browser.gemini_direct import (
     is_configured as direct_is_configured,
     save_cookies,
+    load_cookies,
 )
 from server.doctor import run_doctor
 from server.mcp.tools_system import get_workspace_status
@@ -63,7 +65,14 @@ STATIC_DIR = Path(__file__).parent / "static"
 # Shared Turn Dispatch (single source of truth)
 # ==========================================
 
-def _dispatch_turn(prompt: str, model: str, is_new_session: bool = True):
+def _dispatch_turn(
+    prompt: str,
+    model: str,
+    is_new_session: bool = True,
+    session_id: Optional[str] = None,
+    is_continuation: bool = False,
+    files: Optional[list] = None,
+):
     """
     Resolve a prompt into a turn generator via the unified transport
     dispatcher. Raises HTTPException(503) when no transport is available.
@@ -71,11 +80,22 @@ def _dispatch_turn(prompt: str, model: str, is_new_session: bool = True):
     """
     try:
         try:
-            return resolve_turn(prompt=prompt, model=model, is_new_session=is_new_session)
+            return resolve_turn(
+                prompt=prompt,
+                model=model,
+                is_new_session=is_new_session,
+                session_id=session_id,
+                is_continuation=is_continuation,
+                files=files,
+            )
         except TypeError:
-            return resolve_turn(prompt=prompt, model=model)
+            try:
+                return resolve_turn(prompt=prompt, model=model, is_new_session=is_new_session)
+            except TypeError:
+                return resolve_turn(prompt=prompt, model=model)
     except TransportUnavailable as e:
         raise HTTPException(status_code=503, detail=str(e))
+
 
 
 # ==========================================
@@ -104,21 +124,27 @@ async def chat_completions(req: ChatCompletionRequest):
     num_tools = len(req.tools) if req.tools else 0
     is_continuation = SessionManager.is_continuation_turn(req.messages)
     is_new_session = not is_continuation
+    session_id = SessionManager.get_conversation_fingerprint(req.messages)
+
+    from server.protocol import extract_images_from_messages
+    extracted_files = extract_images_from_messages(req.messages)
 
     from server.bridge.transport import get_mode
     current_mode = get_mode()
-    for_browser = (current_mode == "extension" or (current_mode == "auto" and hub.is_connected))
+    for_stateful = (current_mode == "direct" or (current_mode == "auto" and direct_is_configured()))
+    for_browser = (current_mode == "extension" or (current_mode == "auto" and hub.is_connected and not direct_is_configured()))
 
     LOGGER.info(
-        "📥 [REQ] ChatCompletion 請求 | Model: %s | 訊息數: %d | 工具數: %d | Stream: %s | 會話: %s",
-        req.model, num_msgs, num_tools, req.stream, "接續輪次" if is_continuation else "全新任務",
+        "📥 [REQ] ChatCompletion 請求 | Model: %s | 訊息數: %d | 工具數: %d | Stream: %s | 會話: %s | SessionID: %s | 附加圖片: %d",
+        req.model, num_msgs, num_tools, req.stream, "接續輪次" if is_continuation else "全新任務", session_id[:8], len(extracted_files),
     )
 
-    # 1. Compile multi-turn messages into Gemini prompt (incremental for active browser session)
+    # 1. Compile multi-turn messages into Gemini prompt (incremental for active stateful session)
     compiled = SessionManager.compile_rich_prompt(
         messages=req.messages,
         tools=req.tools,
         for_browser_session=for_browser,
+        for_stateful_session=for_stateful,
     )
     compiled_prompt = compiled.text
 
@@ -130,11 +156,15 @@ async def chat_completions(req: ChatCompletionRequest):
 
     # 2. Dispatch turn through the shared transport resolver.
     turn_generator, transport_name = _dispatch_turn(
-        compiled_prompt,
-        req.model,
+        prompt=compiled_prompt,
+        model=req.model,
         is_new_session=is_new_session,
+        session_id=session_id,
+        is_continuation=is_continuation,
+        files=extracted_files,
     )
     LOGGER.info("🚀 [SEND] 發送至 Gemini | 傳輸: %s | Prompt長度: %d | 新會話: %s", transport_name, len(compiled_prompt), is_new_session)
+
 
     if req.stream:
         return StreamingResponse(
@@ -228,8 +258,20 @@ async def save_cookies_endpoint(payload: dict):
     if not one_psid:
         raise HTTPException(status_code=400, detail="1psid is required.")
 
+    current = load_cookies()
+    if current.get("1psid") == one_psid and current.get("1psidts") == one_psidts:
+        return {"status": "ok", "configured": True, "message": "Cookies unchanged"}
+
     if not save_cookies(one_psid, one_psidts):
         raise HTTPException(status_code=500, detail="Failed to write gemini_cookies.json.")
+
+    # Hot-reload the direct Gemini engine so updated cookies take effect immediately
+    try:
+        from server.browser.gemini_direct import reload_client
+        await reload_client()
+    except Exception as e:
+        LOGGER.warning("Direct client hot-reload warning: %s", e)
+
 
     hub.logs.log(
         "INFO", "COOKIES",
@@ -237,6 +279,7 @@ async def save_cookies_endpoint(payload: dict):
     )
 
     return {"status": "ok", "configured": direct_is_configured()}
+
 
 
 # ==========================================

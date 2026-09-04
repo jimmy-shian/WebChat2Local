@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "gemini-analyzer": {
+      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"
+      ],
+      "env": {
+        "W2L_WORKSPACE": ""
+      },
+      "disabled": false,
+      "autoApprove": [
+        "gemini_analyze_code",
+        "gemini_ask",
+        "gemini_multimodal_inspect",
+        "gemini_web_search"
+      ]
+    }
+  }
+}

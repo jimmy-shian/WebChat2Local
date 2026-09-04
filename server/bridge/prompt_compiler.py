@@ -7,10 +7,14 @@ conversations into an optimized structure for Gemini Web with 100% fidelity.
 
 import hashlib
 import json
+import logging
 import os
 import re
 from typing import List, Dict, Any, Optional
 from server.protocol import ChatMessage
+
+LOGGER = logging.getLogger("webchat2local.bridge")
+
 
 # Spillover staging directory for large outputs (> 12,000 characters, such as 100k git diffs)
 SPILLOVER_DIR = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "scratch", "spillover")
@@ -87,10 +91,10 @@ CLINE_TOOL_REGEX = re.compile(
 
 
 # Safe character ceiling for a single prompt submitted to Gemini Web.
-# Gemini Web's batchexecute / RPC edge supports up to ~45,000 characters.
-# Combined with spill_or_compact_tool_result for massive diffs/logs, this allows
-# full client system prompts and rich multi-turn context without truncation.
-GEMINI_WEB_MAX_PROMPT_CHARS = 45000
+# Gemini Web RPC starts rejecting or timing out when prompt exceeds ~35,000 characters.
+# Setting safe threshold to 32,000 chars ensures instant, error-free responses.
+GEMINI_WEB_MAX_PROMPT_CHARS = 32000
+
 
 
 STANDARD_CODING_TOOLS = [
@@ -409,10 +413,12 @@ class GeminiPromptCompiler:
         if cleaned_messages and (cleaned_messages[-1].role or "").lower() in ("tool", "function"):
             conversation_turns.append(
                 "<assistant_turn_directive>\n"
-                "The previous tool execution has completed with the <tool_result> above. "
-                "Review the result and proceed with answering the user's task or calling the next tool if necessary.\n"
+                "The previous tool execution has completed with the <tool_result> above.\n"
+                "- Review the result and proceed with answering the user's task or calling the next tool (e.g. `read_file`, `execute_command`).\n"
+                "- Do NOT stop or call `attempt_completion` prematurely after merely listing files or taking initial steps.\n"
                 "</assistant_turn_directive>"
             )
+
 
         # Construct final structured prompt blocks
         blocks: List[str] = []
@@ -426,7 +432,7 @@ class GeminiPromptCompiler:
         # 2. Tools definition block
         if tools:
             blocks.append("<available_tools>")
-            blocks.append(json.dumps(tools, ensure_ascii=False, indent=2))
+            blocks.append(cls._compact_tools_definition(tools))
             blocks.append("</available_tools>\n")
 
         base_overhead = sum(len(b) for b in blocks) + 50
@@ -443,6 +449,7 @@ class GeminiPromptCompiler:
             blocks.append("\n\n".join(final_turns))
 
         # 4. Mandatory action directive when tools are available
+        action_prompt = ""
         if tools or any("<tool_call" in turn or "<tool_result" in turn for turn in conversation_turns):
             action_prompt = (
                 "<assistant_action_directive>\n"
@@ -459,15 +466,81 @@ class GeminiPromptCompiler:
             blocks.append(action_prompt)
 
         final_text = "\n\n".join(blocks)
+
+        # Hard ceiling enforcement: ensure total prompt NEVER exceeds GEMINI_WEB_MAX_PROMPT_CHARS
+        if len(final_text) > GEMINI_WEB_MAX_PROMPT_CHARS:
+            LOGGER.warning("⚠️ [PROMPT COMPILER] Prompt 長度 (%d) 超過上限 (%d)，進行保護性裁切...", len(final_text), GEMINI_WEB_MAX_PROMPT_CHARS)
+            if system_prompts and len("\n\n".join(system_prompts)) > 14000:
+                joined_sys = "\n\n".join(system_prompts)
+                keep_head = joined_sys[:10000]
+                keep_tail = joined_sys[-3000:]
+                trimmed_sys = keep_head + "\n\n... [system instructions trimmed for web budget] ...\n\n" + keep_tail
+                if blocks and blocks[0].startswith("<system_instructions>"):
+                    blocks[0] = f"<system_instructions>\n{trimmed_sys}\n</system_instructions>\n"
+                final_text = "\n\n".join(blocks)
+            if len(final_text) > GEMINI_WEB_MAX_PROMPT_CHARS:
+                final_text = final_text[:GEMINI_WEB_MAX_PROMPT_CHARS - 350] + "\n\n... [context truncated to fit web budget]\n\n" + action_prompt
+
         return CompiledGeminiPrompt(
             text=final_text,
             estimated_tokens=len(final_text) // 4,
             is_continuation=False,
         )
 
+    @staticmethod
+    def _compact_tools_definition(tools: List[Dict[str, Any]]) -> str:
+        """
+        Serializes tools into a compact, clean format without massive 2-space indentation,
+        trimming verbose descriptions to keep the prompt well within Google Gemini Web limits.
+        """
+        compact_list = []
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            fn = t.get("function", t) if isinstance(t.get("function"), dict) else t
+            name = fn.get("name", "")
+            desc = (fn.get("description", "") or "").strip()
+            if "\n\n" in desc:
+                desc = desc.split("\n\n")[0].strip()
+            if len(desc) > 200:
+                desc = desc[:200] + "..."
+
+            params = fn.get("parameters", {})
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            compact_props = {}
+            for p_name, p_def in props.items():
+                if isinstance(p_def, dict):
+                    p_type = p_def.get("type", "string")
+                    p_desc = (p_def.get("description", "") or "").strip()
+                    if len(p_desc) > 80:
+                        p_desc = p_desc[:80] + "..."
+                    entry = {"type": p_type}
+                    if p_desc:
+                        entry["description"] = p_desc
+                    if "enum" in p_def:
+                        entry["enum"] = p_def["enum"]
+                    compact_props[p_name] = entry
+                else:
+                    compact_props[p_name] = p_def
+
+            compact_fn = {
+                "name": name,
+                "description": desc,
+                "parameters": {
+                    "type": "object",
+                    "properties": compact_props,
+                }
+            }
+            if isinstance(params, dict) and "required" in params:
+                compact_fn["parameters"]["required"] = params["required"]
+            compact_list.append(compact_fn)
+
+        return json.dumps(compact_list, ensure_ascii=False, separators=(",", ":"))
+
     @classmethod
     def compile_continuation_turn(
         cls,
+
         messages: List[ChatMessage],
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> CompiledGeminiPrompt:
@@ -513,9 +586,15 @@ class GeminiPromptCompiler:
         else:
             parts.append(
                 "<assistant_action_directive>\n"
-                "Review the latest tool result above and proceed to answer the user's task or call another tool if needed.\n"
+                "You are actively working on the user's task. Review the latest <tool_result> above.\n"
+                "- Do NOT terminate or give up after just listing directories or inspecting partial data.\n"
+                "- Continue with the next necessary action (e.g. `read_file` to inspect code, `execute_command`, or answering the user's task in full).\n"
+                "- To invoke a tool, output exactly one tool call block:\n"
+                '<tool_call>{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}</tool_call>\n'
+                "- ONLY call `attempt_completion` when you have thoroughly completed all requirements of the user's task.\n"
                 "</assistant_action_directive>"
             )
+
 
         text = "\n\n".join(parts)
         return CompiledGeminiPrompt(text=text, estimated_tokens=len(text) // 4, is_continuation=True)

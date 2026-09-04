@@ -20,6 +20,7 @@ page_snapshot.png
 .agents/
 .vscode/
 .idea/
+.kilocode/
 .DS_Store
 Thumbs.db
 
@@ -32,7 +33,4 @@ gemini_cookies.json
 .env
 .env.local
 credentials.json
-id_rsa
-id_ed25519
-
 .codex-chatgpt-web

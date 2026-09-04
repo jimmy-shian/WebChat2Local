@@ -50,7 +50,49 @@ start_server.bat
 
 ---
 
-## 3. 本地工具配置 (Kilo Code / Cline / Roo Code / Cursor)
+## 3. 本地工具配置 (MCP 分析工具模式 vs OpenAI API 模式)
+
+### 💡 核心推薦架構：專用 MCP 分析子工具模式 (解決提前結束任務問題)
+
+> [!IMPORTANT]
+> **為什麼強烈推薦使用 MCP 模式而非純 API 驅動模式？**
+> 在實際 Agent 工作流程中，若將 Gemini Web 強制設定為 Cline 或 Kilo 的主要驅動模型（Driver Model），Gemini Web 經常在檢查完第一個目錄或檔案後，以總結語氣觸發 `attempt_completion`，造成任務提前中斷。
+> 
+> **最佳實踐**：
+> 讓你的主力模型（如 **Claude 3.7 Sonnet / GPT-4o / DeepSeek V3**）擔任主驅動 Agent，負責指揮進度、讀寫檔案與測試；將 WebChat2Local 作為 **MCP 工具伺服器** 掛載進去。
+> 當主力模型需要進行**大篇幅多檔案程式碼審核**、**演算法深度思考**、**前端 UI 截圖檢閱** 或 **Google 最新聯網搜尋** 時，會主動呼叫 Gemini 分析工具，發揮 100 萬 Context 與免費 Gemini 2.5 的最大優勢！
+
+#### 一鍵掛載 MCP (Stdio 模式，免開 Port、隨插即用)
+專案於 `mcp_configs/` 內建開箱即用的設定檔：
+- Cline / Roo Code：複製 `mcp_configs/cline_mcp_settings.json`
+- Kilo Code：複製 `mcp_configs/kilo_mcp_settings.json`
+- Cursor：複製 `mcp_configs/cursor_mcp_config.json`
+- Claude Desktop：複製 `mcp_configs/claude_desktop_config.json`
+
+設定範例 (以 Cline 為例)：
+```json
+{
+  "mcpServers": {
+    "gemini-analyzer": {
+      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"],
+      "env": {
+        "W2L_WORKSPACE": "${workspaceFolder}"
+      },
+      "autoApprove": [
+        "gemini_analyze_code",
+        "gemini_ask",
+        "gemini_multimodal_inspect",
+        "gemini_web_search"
+      ]
+    }
+  }
+}
+```
+
+---
+
+### 備用模式：OpenAI 相容 API (Driver Model 模式)
 
 所有工具共通參數：
 - **API Provider**：`OpenAI Compatible`
@@ -151,15 +193,19 @@ Settings → Provider：`OpenAI Compatible`
 - `.agents/skills/gemini-bridge/SKILL.md`：技能庫
 
 可用 MCP 工具：
-| 工具 | 說明 |
-|------|------|
-| `ask_gemini_web` | 向 Gemini Web 發送 Prompt 取得回答與 Thinking |
-| `get_gemini_web_status` | 取得橋接伺服器連線狀態 |
-| `gemini_web_models` | 取得支援模型目錄 |
-| `mcp_read_file` / `mcp_write_file` / `mcp_edit_file` | 檔案操作 |
-| `mcp_list_dir` / `mcp_grep_search` | 目錄與搜尋 |
-| `mcp_run_command` | 執行 PowerShell |
-| `mcp_doctor` | 系統自我診斷 |
+| 工具 | 說明 | 核心特點 |
+|------|------|----------|
+| `gemini_analyze_code` | 多檔案/程式碼深度審核 | 指定多檔案路徑，由 Gemini 檢查架構與邊界漏洞 |
+| `gemini_ask` | 深度思考諮詢 | 向 Gemini 2.5 Pro / Flash Thinking 提問獲取思考過程 |
+| `gemini_multimodal_inspect` | 多模態圖片檢閱 | 讀取本機 UI 截圖或架構圖進行視覺分析與排錯 |
+| `gemini_web_search` | Google 即時聯網搜尋 | 結合 Google Search Grounding 檢索即時文件與 API |
+| `ask_gemini_web` | 相容性舊版查詢接口 | 向 Gemini Web 提問取得回覆與思考過程 |
+| `get_gemini_web_status` | 服務狀態檢查 | 取得後端與直連引擎健康度 |
+| `gemini_web_models` | 模型清單 | 列出所有可用模型與上下文資訊 |
+| `mcp_read_file` / `mcp_write_file` / `mcp_edit_file` | 工作區檔案操作 | 讀取、寫入與局部修改本地檔案 |
+| `mcp_list_dir` / `mcp_grep_search` / `mcp_find_files` | 工作區檔案搜尋 | 遞迴目錄樹、全文檢索與檔名搜尋 |
+| `mcp_run_command` | PowerShell 指令執行 | 安全執行本機指令與測試 |
+| `mcp_doctor` | 系統自我診斷 | 一鍵檢測 Cookie 認證與模型狀態 |
 
 ---
 

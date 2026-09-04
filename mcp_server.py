@@ -1,121 +1,103 @@
 """
-Gemini Web Bridge - Model Context Protocol (MCP) Server for Google Antigravity & AI Clients.
-Exposes Google Gemini Web (gemini.google.com) as an MCP tool, model bridge,
-and full-harness local workspace tools.
+Gemini Analysis MCP Server - Model Context Protocol (MCP) for Cline, Kilo, Cursor & Antigravity.
+Exposes Google Gemini Web as high-power sub-tools for deep code review, repository architecture
+analysis, multimodal image inspection, and live Google web search.
 """
 
 import sys
 import os
 import json
-import httpx
-from typing import Optional, Dict, Any
+import argparse
+from typing import Optional, List, Dict, Any
 from mcp.server.mcpserver import MCPServer
 
-from server.config import BASE_URL
+from server.mcp.gemini_analysis_tools import (
+    analyze_code,
+    ask_gemini,
+    inspect_image,
+    web_search,
+)
 from server.mcp.tools_filesystem import read_file, write_file, edit_file, list_dir, find_files
 from server.mcp.tools_shell import run_command
 from server.mcp.tools_search import grep_search, find_files as search_find_files
 from server.mcp.tools_system import get_workspace_status, doctor
-
-BRIDGE_API_URL = os.getenv("W2L_BRIDGE_URL", f"{BASE_URL}/v1")
+from server.browser.gemini_direct import load_cookies, is_configured as direct_is_configured
 
 mcp = MCPServer(
     name="gemini-web-bridge",
-    instructions="Gemini Web Bridge MCP Server. Forwards prompts, reasoning, and coding tasks directly to Google Gemini Web (gemini.google.com), and provides local workspace tools."
+    instructions=(
+        "Gemini Analysis MCP Server. Provides Google Gemini Web's massive context (1M+ tokens), "
+        "thinking process, multimodal image inspection, and live web search grounding as specialized "
+        "code & task analysis sub-tools for AI agents."
+    )
 )
 
-
 # ==========================================
-# Gemini Web Model Bridge Tools
+# Specialized Gemini Web Analysis Tools
 # ==========================================
 
 @mcp.tool()
-def ask_gemini_web(prompt: str, model: str = "gemini-web/pro") -> str:
+async def gemini_analyze_code(
+    files: Optional[List[str]] = None,
+    code_snippet: Optional[str] = None,
+    instructions: str = "Perform an in-depth code review, identify potential bugs, architectural flaws, security issues, and propose concrete improvements.",
+    model: str = "gemini-web/pro",
+) -> str:
     """
-    Forward a prompt, reasoning inquiry, or coding task to Google Gemini Web (gemini.google.com) and retrieve the AI response and thinking process.
-
-    Args:
-        prompt: The question, code request, or task description to send to Gemini Web.
-        model: Model to use ('gemini-web/pro', 'gemini-web/flash', 'gemini-web/flash-thinking', 'gemini-web/ultra').
+    Analyzes local project files, directory codebases, or raw diff snippets using Gemini's massive context window.
+    Use this when you need deep code review, architectural critique, bug finding, or refactoring advice.
     """
-    url = f"{BRIDGE_API_URL}/chat/completions"
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "stream": False,
-    }
-
-    try:
-        with httpx.Client(timeout=180.0) as client:
-            resp = client.post(url, json=payload)
-            if resp.status_code == 503:
-                return (
-                    "【Gemini Web 尚未連線】\n"
-                    "請先開啟 Chrome 或 Edge 瀏覽器，載入 WebChat2Local 擴充套件，並開啟 https://gemini.google.com 網頁。\n"
-                    "網頁右下角顯示 🟢 連線後即可使用！"
-                )
-            if resp.status_code != 200:
-                return f"[Gemini Bridge 錯誤 ({resp.status_code})]: {resp.text}"
-
-            data = resp.json()
-            choice = data.get("choices", [{}])[0]
-            message = choice.get("message", {})
-            content = message.get("content", "")
-            reasoning = message.get("reasoning_content")
-
-            output_parts = []
-            if reasoning:
-                output_parts.append(f"### [Gemini Thinking / 思考過程]\n{reasoning}\n")
-            if content:
-                output_parts.append(f"### [Gemini Response / 回應]\n{content}")
-
-            return "\n".join(output_parts) if output_parts else "【Gemini Web 回傳了空回應】"
-
-    except httpx.ConnectError:
-        return (
-            "【本地伺服器未啟動】\n"
-            "請先雙擊專案目錄下的 start_server.bat 或執行 python run_server.py start 啟動伺服器 (127.0.0.1:8765)。"
-        )
-    except Exception as e:
-        return f"[連線異常]: {str(e)}"
+    return await analyze_code(
+        files=files,
+        code_snippet=code_snippet,
+        instructions=instructions,
+        model=model,
+    )
 
 
 @mcp.tool()
-def get_gemini_web_status() -> str:
+async def gemini_ask(
+    prompt: str,
+    model: str = "gemini-web/pro",
+) -> str:
     """
-    Get the real-time connection status of the Gemini Web browser extension and local bridge gateway.
+    Consults Gemini Web with deep thinking process for complex architecture questions, hard debugging, or algorithm design.
     """
-    url = f"{BRIDGE_API_URL}/status"
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.get(url)
-            if resp.status_code == 200:
-                data = resp.json()
-                is_conn = data.get("browser_connected", False)
-                status_text = "[CONNECTED] Gemini Web Ready" if is_conn else "[DISCONNECTED] Browser not connected (Please open gemini.google.com)"
-                return json.dumps({
-                    "bridge_status": status_text,
-                    "browser_connected": is_conn,
-                    "active_tabs": data.get("active_tabs", 0),
-                    "endpoint": BRIDGE_API_URL,
-                    "available_models": ["gemini-web/pro", "gemini-web/flash", "gemini-web/flash-thinking", "gemini-web/ultra"]
-                }, ensure_ascii=False, indent=2)
-            return f"[伺服器回應異常 ({resp.status_code})]: {resp.text}"
-    except httpx.ConnectError:
-        return json.dumps({
-            "bridge_status": "[DISCONNECTED] Local Server Not Running (127.0.0.1:8765)",
-            "browser_connected": False,
-            "hint": "Please run start_server.bat or python run_server.py start"
-        }, ensure_ascii=False, indent=2)
-    except Exception as e:
-        return f"[診斷錯誤]: {str(e)}"
+    return await ask_gemini(prompt=prompt, model=model)
+
+
+@mcp.tool()
+async def gemini_multimodal_inspect(
+    image_path: str,
+    prompt: str = "Analyze this image, screenshot, or UI mockup. Identify UI components, visual bugs, styling defects, or text contents.",
+    model: str = "gemini-web/flash",
+) -> str:
+    """
+    Inspects a local image file or screenshot (PNG, JPG, WEBP) using Gemini Web's vision capabilities.
+    """
+    return await inspect_image(image_path=image_path, prompt=prompt, model=model)
+
+
+@mcp.tool()
+async def gemini_web_search(
+    query: str,
+    instructions: Optional[str] = None,
+) -> str:
+    """
+    Performs a real-time web search using Google Search grounding for latest documentation, APIs, or bug solutions.
+    """
+    return await web_search(query=query, instructions=instructions)
+
+
+@mcp.tool()
+async def ask_gemini_web(prompt: str, model: str = "gemini-web/pro") -> str:
+    """Backward compatibility tool alias for gemini_ask."""
+    return await ask_gemini(prompt=prompt, model=model)
 
 
 @mcp.tool()
 def gemini_web_models() -> str:
-    """
-    List the supported Gemini Web models available through this bridge.
-    """
+    """List the supported Gemini Web models available through this bridge."""
     return json.dumps({
         "models": [
             {"id": "gemini-web/pro", "name": "Google Gemini 2.5 Pro (Web)", "supports_thinking": True},
@@ -124,6 +106,21 @@ def gemini_web_models() -> str:
             {"id": "gemini-web/ultra", "name": "Google Gemini Advanced Ultra (Web)", "supports_thinking": True},
         ]
     }, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def get_gemini_web_status() -> str:
+    """Get the real-time connection status of the Gemini Web bridge and local credentials."""
+    cookies = load_cookies()
+    has_psid = bool(cookies.get("1psid"))
+    return json.dumps({
+        "bridge_status": "[READY] Gemini Web Analysis MCP Ready" if has_psid else "[CONFIG_NEEDED] Missing cookies",
+        "cookie_configured": has_psid,
+        "mode": "direct_mcp",
+        "available_models": ["gemini-web/pro", "gemini-web/flash", "gemini-web/ultra"],
+    }, ensure_ascii=False, indent=2)
+
+
 
 
 # ==========================================
@@ -179,17 +176,63 @@ def mcp_grep_search(query: str, path: str = ".", case_sensitive: bool = False, m
 
 @mcp.tool()
 def mcp_run_command(command: str, cwd: Optional[str] = None, timeout_seconds: int = 60) -> str:
-    """Execute a PowerShell command in the workspace."""
+    """Execute a command in the workspace."""
     res = run_command(command=command, cwd=cwd, timeout_seconds=timeout_seconds)
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
 def mcp_doctor() -> str:
-    """Run full system diagnostics on the local bridge and environment."""
+    """Run full diagnostics on the MCP server, credentials, and environment."""
     res = doctor()
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
+def print_doctor_report():
+    print("=" * 60)
+    print(" Gemini Analysis MCP Server - Diagnostic Report")
+    print("=" * 60)
+    cookies = load_cookies()
+    has_psid = bool(cookies.get("1psid"))
+    print(f"[*] Cookie Configured: {has_psid}")
+    if has_psid:
+        print(f"[*] 1PSID: {cookies['1psid'][:12]}... (Total length: {len(cookies['1psid'])})")
+        print(f"[*] 1PSIDTS: {'Configured' if cookies.get('1psidts') else 'Not set'}")
+    else:
+        print("[-] Warning: gemini_cookies.json not found or missing __Secure-1PSID.")
+        print("    Run start_server.bat and click '自動抓取 Cookie' in the browser extension,")
+        print("    or create gemini_cookies.json with your cookies.")
+
+    print("\n[*] Available MCP Tools:")
+    print("    - gemini_analyze_code (Deep file/codebase review)")
+    print("    - gemini_ask (General reasoning and deep thinking consultation)")
+    print("    - gemini_multimodal_inspect (Screenshot and visual UI analysis)")
+    print("    - gemini_web_search (Google search grounding for live documentation)")
+    print("    - mcp_read_file, mcp_write_file, mcp_edit_file, mcp_list_dir, mcp_grep_search, mcp_run_command")
+    print("=" * 60)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Gemini Analysis MCP Server")
+    parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio", help="MCP transport mode (default: stdio)")
+    parser.add_argument("--host", default="127.0.0.1", help="Host for SSE transport (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8765, help="Port for SSE transport (default: 8765)")
+    parser.add_argument("--doctor", action="store_true", help="Print diagnostic report and exit")
+
+    args = parser.parse_args()
+
+    if args.doctor:
+        print_doctor_report()
+        return
+
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    elif args.transport == "sse":
+        import uvicorn
+        app = mcp.sse_app()
+        print(f"Starting Gemini Analysis MCP Server (SSE) on http://{args.host}:{args.port}")
+        uvicorn.run(app, host=args.host, port=args.port)
+
+
 if __name__ == "__main__":
-    mcp.run()
+    main()

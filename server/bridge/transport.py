@@ -18,7 +18,7 @@ through resolve_turn() so the selection logic is never duplicated.
 
 import os
 import threading
-from typing import AsyncGenerator, Tuple
+from typing import AsyncGenerator, Tuple, Optional, List, Any
 
 from server.config import DIRECT_FALLBACK_ENABLED, DIRECT_ONLY
 from server.browser.gemini_direct import (
@@ -33,8 +33,8 @@ _mode_lock = threading.Lock()
 
 
 def _default_mode() -> str:
-    mode = os.getenv("W2L_TRANSPORT", "extension").strip().lower()
-    return mode if mode in VALID_MODES else "extension"
+    mode = os.getenv("W2L_TRANSPORT", "direct").strip().lower()
+    return mode if mode in VALID_MODES else "direct"
 
 
 _mode: str = _default_mode()
@@ -81,11 +81,13 @@ def resolve_turn(
     prompt: str,
     model: str,
     is_new_session: bool = True,
+    session_id: Optional[str] = None,
+    is_continuation: bool = False,
+    files: Optional[list] = None,
 ) -> Tuple[AsyncGenerator, str]:
     """
     Resolve a prompt into (turn_generator, transport_name) using the current
-    mode. Raises TransportUnavailable with a user-facing message when neither
-    transport can serve the request.
+    mode. Passes session_id, is_continuation, and files to stateful direct engine.
     """
     mode = get_mode()
 
@@ -100,27 +102,45 @@ def resolve_turn(
                 "請開啟 gemini.google.com 讓擴充套件自動同步，"
                 "或手動設定 GEMINI_1PSID / gemini_cookies.json。"
             )
-        return direct_stream_generate(prompt=prompt, model=model), "direct"
+        return direct_stream_generate(
+            prompt=prompt,
+            model=model,
+            session_id=session_id,
+            is_continuation=is_continuation,
+            files=files,
+        ), "direct"
 
     if mode == "extension":
         if hub.is_connected:
             return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session), "extension"
         if _direct_ok():
             # Graceful fallback to direct cookie when extension is chosen but not currently open
-            return direct_stream_generate(prompt=prompt, model=model), "direct"
+            return direct_stream_generate(
+                prompt=prompt,
+                model=model,
+                session_id=session_id,
+                is_continuation=is_continuation,
+                files=files,
+            ), "direct"
         raise TransportUnavailable(
             "Web 視窗模式已選擇，但瀏覽器擴充套件尚未連線。"
             "請開啟 https://gemini.google.com 頁面。"
         )
 
-    # auto mode: Extension-first to enable session-bound tab continuity
+    # auto mode: Direct-first when cookies configured, extension fallback
+    if _direct_ok():
+        return direct_stream_generate(
+            prompt=prompt,
+            model=model,
+            session_id=session_id,
+            is_continuation=is_continuation,
+            files=files,
+        ), "direct"
     if hub.is_connected:
         return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session), "extension"
-    if _direct_ok():
-        return direct_stream_generate(prompt=prompt, model=model), "direct"
 
     raise TransportUnavailable(
         "Gemini Web 瀏覽器擴充套件未連線，且沒有可用的 cookie 直連設定。"
         "開啟 https://gemini.google.com 讓擴充套件自動同步 cookie，"
         "或設定 GEMINI_1PSID / gemini_cookies.json。"
-    )
+    )

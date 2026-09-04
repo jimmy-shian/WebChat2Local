@@ -1,8 +1,8 @@
-# Gemini Web to Local Bridge (WebChat2Local)
+# Gemini Web Analysis MCP Server (WebChat2Local)
 
 <p align="center">
-  <strong>Use Google Gemini Web (including 2.5 Pro & Flash Thinking) as native local models.</strong><br>
-  OpenAI Compatible API · MCP Server · Zero API Fees · Real-Time Thinking Stream
+  <strong>High-Performance Code Analysis & Multimodal MCP Server powered by Google Gemini Web.</strong><br>
+  Dedicated MCP Analysis Suite · Zero API Fees · Real-Time Thinking Process · Multimodal Vision & Grounding
 </p>
 
 <p align="center">
@@ -11,83 +11,143 @@
 
 ---
 
-## Highlights
+## 💡 Why an MCP Server instead of an Autonomous Driver Model?
 
-- **Native OpenAI & Responses API**: Exposes `/v1/chat/completions`, `/v1/models`, and `/v1/responses` on `http://127.0.0.1:8765/v1`.
-- **Works with All Local AI Clients**: 1-click configuration for **Cline**, **Kilo Code**, **Google Antigravity**, **Cursor**, and **Roo Code**.
-- **Real-Time Thinking Stream (`reasoning_content`)**: Full SSE streaming of Gemini 2.5 Pro / Flash Thinking reasoning process.
-- **Model Context Protocol (MCP)**: Native stdio MCP Server (`gemini-web-bridge`) with model query tools and local workspace harness tools.
-- **Zero Disk Wear & Safe In-Memory Logs**: Fast in-memory circular logs and state management.
-- **OpenDesign Dark-Theme Web Dashboard**: Live HUD status, synthetic dev chat tester, model catalog chips, and diagnostic doctor.
+When Gemini Web was forced to act as the primary autonomous agent driver (`/v1/chat/completions`) in coding assistants like **Cline** or **Kilo Code**, it frequently ended multi-step coding workflows prematurely (e.g. issuing `attempt_completion` after inspecting only one file or directory).
+
+**The Solution: Dedicated Analysis MCP Server**
+By transforming WebChat2Local into a Model Context Protocol (MCP) server:
+- **Your Primary Model (Claude 3.7 Sonnet / GPT-4o / DeepSeek V3)** drives the task, manages files, runs tests, and maintains the autonomous execution loop.
+- **Gemini Web acts as a specialized, free, high-capacity sub-tool**: performing heavy multi-file code reviews, visual screenshot inspections, live Google search grounding, and deep architectural reasoning.
 
 ---
 
-## Architecture
+## 🛠️ MCP Analysis Tool Suite
 
-```text
-Cline / Kilo / Antigravity / Cursor / RooCode
-                    │
-                    ▼  OpenAI & Responses API (SSE / JSON)
-┌────────────────────────────────────────────────────────┐
-│  Gemini Web to Local Bridge (FastAPI Gateway :8765)    │
-│  ├─ /v1/models (Catalog & context limits)              │
-│  ├─ /v1/chat/completions (OpenAI SSE + reasoning_delta)│
-│  ├─ /v1/responses (Antigravity/Codex Responses SSE)    │
-│  ├─ Stdio MCP Server (gemini-web-bridge)               │
-│  └─ OpenDesign Dark Web Dashboard (http://127.0.0.1:8765)│
-└──────────────────────────┬─────────────────────────────┘
-                           │ WebSocket (:8765/ws)
-                           ▼
-┌────────────────────────────────────────────────────────┐
-│  Chrome / Edge Browser Extension (Manifest V3)         │
-│  ├─ Floating HUD Status Badge                          │
-│  ├─ Input Injector & Model Switcher                    │
-│  └─ DOM Mutation Observer & Stream Extractor           │
-└──────────────────────────┬─────────────────────────────┘
-                           ▼
-             Google Gemini Web Interface (gemini.google.com)
+| MCP Tool | Description | Key Capabilities |
+| :--- | :--- | :--- |
+| `gemini_analyze_code` | **Deep Codebase & File Review** | Analyze multiple local files or code snippets for architecture issues, edge-case bugs, and optimizations. |
+| `gemini_ask` | **Deep Thinking Consultation** | Query Gemini 2.5 Pro / Flash Thinking with chain-of-thought reasoning process for complex algorithmic or architectural questions. |
+| `gemini_multimodal_inspect` | **Multimodal Vision & UI Review** | Pass local images or UI screenshots to Gemini vision for frontend styling analysis, visual bug detection, or diagram interpretation. |
+| `gemini_web_search` | **Live Web Grounding** | Query Gemini grounded with real-time Google Web Search for latest libraries, framework documentation, and live APIs. |
+| `mcp_read_file` / `mcp_write_file` / `mcp_edit_file` | **Workspace File Ops** | Read, write, and patch files within the local project workspace. |
+| `mcp_list_dir` / `mcp_grep_search` / `mcp_find_files` | **Workspace Search** | Fast recursive file listing, regex search, and file discovery. |
+| `mcp_run_command` | **Workspace Terminal** | Execute safe diagnostic and build commands in PowerShell. |
+| `mcp_doctor` | **System Self-Diagnostic** | Diagnose cookie validity, model availability, and workspace status. |
+
+---
+
+## 🚀 Quick Setup (1-Click MCP Configs)
+
+Ready-to-copy configuration files are available in the `mcp_configs/` directory:
+
+### 1. Cline / Roo Code (VS Code)
+Add to your Cline MCP settings (`cline_mcp_settings.json`):
+```json
+{
+  "mcpServers": {
+    "gemini-analyzer": {
+      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"],
+      "env": {
+        "W2L_WORKSPACE": "${workspaceFolder}"
+      },
+      "autoApprove": [
+        "gemini_analyze_code",
+        "gemini_ask",
+        "gemini_multimodal_inspect",
+        "gemini_web_search"
+      ]
+    }
+  }
+}
+```
+
+### 2. Kilo Code
+Import `mcp_configs/kilo_mcp_settings.json` or configure the MCP tab in Kilo with:
+- **Command**: `C:\Users\Administrator\venv\Scripts\python.exe`
+- **Args**: `C:\Users\Administrator\Desktop\html_test\WebChat2Local\mcp_server.py`
+
+### 3. Cursor
+Add to Cursor MCP Settings (`~/.cursor/mcp.json`):
+```json
+{
+  "mcpServers": {
+    "gemini-analyzer": {
+      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"],
+      "env": {
+        "W2L_WORKSPACE": "${workspaceFolder}"
+      }
+    }
+  }
+}
+```
+
+### 4. Claude Desktop
+Add to `%APPDATA%\Claude\claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "gemini-analyzer": {
+      "command": "C:\\Users\\Administrator\\venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local\\mcp_server.py"],
+      "env": {
+        "W2L_WORKSPACE": "C:\\Users\\Administrator\\Desktop\\html_test\\WebChat2Local"
+      }
+    }
+  }
+}
 ```
 
 ---
 
-## Quick Start
+## 🔑 Authentication & Cookie Setup
 
-### 1. Start the Bridge Server
-Double-click `start_server.bat` or run:
+The MCP server automatically connects via direct HTTPS to Google Gemini without requiring any browser windows open:
+
+1. **Option A (One-Click Extension Sync - Recommended)**:
+   - Install the extension in `extension/` in Chrome or Edge (`chrome://extensions` -> Load unpacked).
+   - Navigate to [https://gemini.google.com](https://gemini.google.com).
+   - Click the extension icon and click **"抓取 Cookie 並存入本地"**. This saves `gemini_cookies.json` automatically.
+2. **Option B (Manual Cookie File)**:
+   - Copy `gemini_cookies.example.json` to `gemini_cookies.json` and fill in your `__Secure-1PSID` and `__Secure-1PSIDTS`.
+3. **Option C (Auto Browser Cookie Fallback)**:
+   - The engine automatically attempts to read Chrome/Edge cookies if `gemini_cookies.json` is absent.
+
+### Health Check
+Run the diagnostic check at any time:
+```powershell
+& "C:\Users\Administrator\venv\Scripts\python.exe" mcp_server.py --doctor
+```
+
+---
+
+## 🌐 Optional: OpenAI-Compatible HTTP Bridge
+
+If you still wish to run the legacy `/v1/chat/completions` API gateway alongside MCP:
 ```powershell
 & "C:\Users\Administrator\venv\Scripts\python.exe" run_server.py start
 ```
-The server will start at `http://127.0.0.1:8765`.
-
-### 2. Load Browser Extension
-1. Open Chrome or Edge and navigate to `chrome://extensions/`
-2. Enable **Developer mode** (top right)
-3. Click **Load unpacked** and select the `extension/` folder in this repository.
-4. Navigate to [https://gemini.google.com](https://gemini.google.com).
-5. The floating HUD in the bottom right corner will turn green: `🟢 Gemini Bridge 就緒`.
-
-### 3. Setup Client Tools
-
-| Tool | Provider | Base URL | Model ID | Documentation |
-| :--- | :--- | :--- | :--- | :--- |
-| **Cline** | OpenAI Compatible | `http://127.0.0.1:8765/v1` | `gemini-web/pro` | [Guide](docs/CLINE_CONFIG.md) |
-| **Kilo Code** | OpenAI Compatible | `http://127.0.0.1:8765/v1` | `gemini-web/flash-thinking` | [Guide](docs/KILO_CONFIG.md) |
-| **Antigravity** | MCP Server | Stdio MCP | `gemini-web-bridge` | [Guide](docs/ANTIGRAVITY_INTEGRATION.md) |
-| **Cursor** | OpenAI Custom | `http://127.0.0.1:8765/v1` | `gemini-web/pro` | [Guide](docs/CURSOR_ROOCODE_CONFIG.md) |
+- Dashboard: `http://127.0.0.1:8765`
+- OpenAI Base URL: `http://127.0.0.1:8765/v1`
 
 ---
 
-## Model Catalog
+## 🧪 Testing & Verification
 
-| Model ID | Backend Mode | Context Window | Thinking Stream | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `gemini-web/pro` | Gemini 2.5 Pro | 1,000,000 | Yes | Flagship reasoning & coding intelligence |
-| `gemini-web/flash` | Gemini 2.5 Flash | 1,000,000 | Yes | High-speed multimodal generation |
-| `gemini-web/flash-thinking` | Flash Thinking | 1,000,000 | Yes | Deep chain-of-thought stream |
-| `gemini-web/ultra` | Gemini Ultra | 1,000,000 | Yes | Advanced tier complex analysis |
+Run the comprehensive unit test suite:
+```powershell
+& "C:\Users\Administrator\venv\Scripts\python.exe" -m pytest tests -s
+```
+All 63 test suites verify:
+- Stdio MCP Server protocol handshakes
+- Code analysis formatting & file reading
+- Multimodal image loading & vision prompt compilation
+- Google grounding web search
+- Workspace sandbox security & path traversal guards
 
 ---
 
-## License
-
+## 📄 License
 MIT License.
