@@ -1,6 +1,6 @@
 /**
- * Gemini Web to Local Bridge - Main Content Script
- * Connects gemini.google.com to the local Python gateway and MCP engine.
+ * WebChat to Local Bridge - Main Content Script
+ * Connects gemini.google.com and chatgpt.com to the local Python gateway and MCP engine.
  */
 
 let ws = null;
@@ -11,6 +11,34 @@ let rawForwarded = false;
 let lastApiTurnTimestamp = 0;
 const TURN_DEADLINE_MS = 120000;
 const pendingMcpCalls = new Map();
+
+const isChatGPT = window.location.hostname.includes("chatgpt.com");
+const isGemini = window.location.hostname.includes("gemini.google.com");
+const currentPlatform = isChatGPT ? "chatgpt" : (isGemini ? "gemini" : "unknown");
+
+function getActiveController() {
+  if (isChatGPT) return window.ChatGptController;
+  return window.GeminiController;
+}
+
+function getActiveExtractor() {
+  if (isChatGPT) return window.ChatGptExtractor;
+  return window.GeminiExtractor;
+}
+
+function getStoredSettings() {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get({
+        autoReload: isChatGPT, // Default true for ChatGPT guest mode
+        forceNewChat: true,
+        autoDismissModals: true
+      }, resolve);
+    } else {
+      resolve({ autoReload: isChatGPT, forceNewChat: true, autoDismissModals: true });
+    }
+  });
+}
 
 function callLocalMcpTool(toolName, args) {
   return new Promise((resolve, reject) => {
@@ -30,27 +58,25 @@ function callLocalMcpTool(toolName, args) {
       tool: toolName,
       arguments: args || {}
     }));
-    console.log(`[Gemini Tunnel] Dispatched MCP tool '${toolName}' to local bridge (id=${callId})`);
+    console.log(`[WebChat Tunnel] Dispatched MCP tool '${toolName}' to local bridge (id=${callId})`);
   });
 }
 
+// Window message listener for MAIN-world interceptor (used on Gemini)
 window.addEventListener("message", (event) => {
   if (event.source !== window || !event.data || event.data.source !== "webchat2local-network") return;
 
   const msg = event.data;
   if (msg.type === "W2L_INTERCEPTOR_PONG") {
-    console.log(`[Gemini Bridge] MAIN-world interceptor ready (${msg.version}).`);
+    console.log(`[WebChat Bridge] MAIN-world interceptor ready (${msg.version}).`);
     return;
   }
 
-  // The MAIN-world interceptor is explicitly armed for the current turn by
-  // handleIncomingMessage().  Its request_id is the turn_id, so events can be
-  // routed without guessing which network request belongs to which turn.
   if (!activeTurnId) return;
   if (msg.request_id && msg.request_id !== activeTurnId) return;
 
   if (msg.type === "capture_attempt") {
-    console.log(`[Gemini Bridge][LOCAL-TRACE] capture_attempt turn=${activeTurnId} transport=${msg.transport || "?"} rpcids=${msg.rpcids || "-"}`);
+    console.log(`[WebChat Bridge][LOCAL-TRACE] capture_attempt turn=${activeTurnId} transport=${msg.transport || "?"} rpcids=${msg.rpcids || "-"}`);
     return;
   }
 
@@ -66,22 +92,18 @@ window.addEventListener("message", (event) => {
         thought: "",
         thought_delta: "",
       }));
-      console.log(`[Gemini Bridge][LOCAL-TRACE] raw_chunk id=${activeTurnId} text_len=${msg.accumulated.length} delta_len=${delta.length}`);
     }
     return;
   }
 
   if (msg.type === "stream_error") {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "error", turn_id: activeTurnId, error: msg.error || "Gemini network stream error" }));
+      ws.send(JSON.stringify({ type: "error", turn_id: activeTurnId, error: msg.error || "Network stream error" }));
     }
     return;
   }
 
   if (msg.type === "done") {
-    // An interceptor completion with no extracted answer is NOT authoritative;
-    // keep the DOM path alive because the transport parser may intentionally
-    // reject a frame that Gemini rendered successfully.
     if (typeof msg.full_text === "string" && msg.full_text.trim().length > 0) {
       rawForwarded = true;
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -93,8 +115,6 @@ window.addEventListener("message", (event) => {
         }));
       }
       isGeneratingResponse = false;
-      // Leave the turn state intact until streamResponseTurn observes this
-      // completion; its finally block owns the interceptor disarm/lock cleanup.
     }
   }
 });
@@ -105,29 +125,32 @@ function init() {
   }
   connectWebSocket();
 
-  // Watch for manual chat completions on gemini.google.com to execute autonomous in-browser MCP Tunnel
-  let lastObservedResponse = null;
-  let observerDebounce = null;
-  const observer = new MutationObserver(() => {
-    if (isGeneratingResponse || activeTurnId) return;
-    // Suppress in-page autonomous tool execution when API client (Kilo/Cline) is actively driving sessions
-    if (Date.now() - lastApiTurnTimestamp < 300000) return;
-    if (observerDebounce) clearTimeout(observerDebounce);
-    observerDebounce = setTimeout(() => {
-      const isGen = window.GeminiController ? window.GeminiController.isGenerating() : false;
-      if (!isGen && window.GeminiExtractor) {
-        const respEl = window.GeminiExtractor.findCurrentTurnResponseElement();
-        if (respEl && respEl !== lastObservedResponse) {
-          lastObservedResponse = respEl;
-          runInPageMcpTunnelLoop(respEl);
+  // Watch for in-page chat completions to execute in-page MCP Tunnel (Gemini only)
+  if (isGemini) {
+    let lastObservedResponse = null;
+    let observerDebounce = null;
+    const observer = new MutationObserver(() => {
+      if (isGeneratingResponse || activeTurnId) return;
+      if (Date.now() - lastApiTurnTimestamp < 300000) return;
+      if (observerDebounce) clearTimeout(observerDebounce);
+      observerDebounce = setTimeout(() => {
+        const controller = getActiveController();
+        const isGen = controller ? controller.isGenerating() : false;
+        const extractor = getActiveExtractor();
+        if (!isGen && extractor) {
+          const respEl = extractor.findCurrentTurnResponseElement();
+          if (respEl && respEl !== lastObservedResponse) {
+            lastObservedResponse = respEl;
+            runInPageMcpTunnelLoop(respEl);
+          }
         }
-      }
-    }, 500);
-  });
+      }, 500);
+    });
 
-  try {
-    observer.observe(document.body, { childList: true, subtree: true });
-  } catch (_) {}
+    try {
+      observer.observe(document.body, { childList: true, subtree: true });
+    } catch (_) {}
+  }
 }
 
 function connectWebSocket() {
@@ -139,17 +162,17 @@ function connectWebSocket() {
     ws = new WebSocket("ws://127.0.0.1:8765/ws");
 
     ws.onopen = () => {
-      console.log("[Gemini Bridge] WebSocket Connected to 127.0.0.1:8765");
+      console.log(`[WebChat Bridge] WebSocket Connected to 127.0.0.1:8765 (${currentPlatform})`);
       if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
 
       ws.send(JSON.stringify({
         type: "ready",
         meta: {
           url: window.location.href,
-          model: "Google Gemini Web",
+          platform: currentPlatform,
+          model: isChatGPT ? "ChatGPT Web (Guest)" : "Google Gemini Web",
         }
       }));
-      console.log("[Gemini Bridge][LOCAL-TRACE] ready sent", window.location.href);
     };
 
     ws.onmessage = async (event) => {
@@ -157,7 +180,7 @@ function connectWebSocket() {
         const msg = JSON.parse(event.data);
         handleIncomingMessage(msg);
       } catch (err) {
-        console.error("[Gemini Bridge] Error parsing WS message:", err);
+        console.error("[WebChat Bridge] Error parsing WS message:", err);
       }
     };
 
@@ -194,18 +217,18 @@ async function handleIncomingMessage(msg) {
       const { resolve, timer, toolName } = pendingMcpCalls.get(callId);
       clearTimeout(timer);
       pendingMcpCalls.delete(callId);
-      console.log(`[Gemini Tunnel] Received MCP tool result for '${toolName}' (id=${callId})`);
+      console.log(`[WebChat Tunnel] Received MCP tool result for '${toolName}' (id=${callId})`);
       resolve(msg.result);
     }
     return;
   }
 
   if (msg.type === "cancel_turn" || msg.type === "reset") {
-    console.log("[Gemini Bridge] Received cancel/reset command.");
+    console.log("[WebChat Bridge] Received cancel/reset command.");
     isGeneratingResponse = false;
     activeTurnId = null;
     try {
-      const stopBtns = document.querySelectorAll("button[aria-label*='Stop'], button[aria-label*='停止'], button[aria-label*='Stop generating'], .stop-button");
+      const stopBtns = document.querySelectorAll("button[aria-label*='Stop'], button[aria-label*='停止'], [data-testid='stop-button'], .stop-button");
       stopBtns.forEach(b => { if (b.offsetParent !== null) b.click(); });
     } catch (_) {}
     if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
@@ -218,22 +241,34 @@ async function handleIncomingMessage(msg) {
   if (msg.type === "submit_prompt") {
     const turnId = msg.turn_id;
     const promptText = msg.prompt;
-    const model = msg.model || "gemini-web/pro";
+    const model = msg.model || (isChatGPT ? "chatgpt-web/gpt-4o-mini" : "gemini-web/pro");
 
-    // Auto-recovery & smooth turn sequencing
+    const controller = getActiveController();
+    const extractor = getActiveExtractor();
+
+    if (!controller || !extractor) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: "error",
+          turn_id: turnId,
+          error: `無法載入控制器 (${currentPlatform})，請確認擴充套件已正確載入腳本。`
+        }));
+      }
+      return;
+    }
+
+    // Auto-recovery & turn sequencing
     if (isGeneratingResponse || activeTurnId) {
-      const isStillGenerating = window.GeminiController ? window.GeminiController.isGenerating() : false;
+      const isStillGenerating = controller.isGenerating ? controller.isGenerating() : false;
       if (!isStillGenerating) {
-        console.warn("[Gemini Bridge] Auto-clearing idle turn lock for new turn:", turnId);
         isGeneratingResponse = false;
         activeTurnId = null;
       } else {
-        // If web page is still in progress, wait up to 4s for previous turn to finish generating
-        console.warn("[Gemini Bridge] Previous turn still generating on webpage, waiting for completion...");
+        console.warn("[WebChat Bridge] Previous turn still generating on webpage, waiting...");
         let cleared = false;
         for (let i = 0; i < 40; i++) {
           await sleep(100);
-          if (!window.GeminiController.isGenerating()) {
+          if (!controller.isGenerating()) {
             cleared = true;
             break;
           }
@@ -242,28 +277,31 @@ async function handleIncomingMessage(msg) {
           isGeneratingResponse = false;
           activeTurnId = null;
         } else {
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({
-            type: "error", turn_id: turnId,
-            error: "已有 Gemini request 正在執行（網頁端仍在生成中）；為避免 concurrent browser turns，已拒絕本次要求。"
-          }));
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: "error",
+              turn_id: turnId,
+              error: "已有對話正在執行；為避免頁面競態，已拒絕本次要求。"
+            }));
+          }
           return;
         }
       }
     }
+
     activeTurnId = turnId;
     rawForwarded = false;
 
-    // Arm the MAIN-world network interceptor BEFORE Gemini receives the
-    // submitted prompt.  Without this handshake the interceptor's
-    // activeRequestId remains null and it deliberately captures nothing.
-    try {
-      window.postMessage({
-        source: "webchat2local-content",
-        type: "W2L_SET_ACTIVE_REQUEST",
-        request_id: turnId,
-      }, "*");
-      console.log(`[Gemini Bridge][LOCAL-TRACE] interceptor armed id=${turnId}`);
-    } catch (_) {}
+    // Arm MAIN-world interceptor if on Gemini
+    if (isGemini) {
+      try {
+        window.postMessage({
+          source: "webchat2local-content",
+          type: "W2L_SET_ACTIVE_REQUEST",
+          request_id: turnId,
+        }, "*");
+      } catch (_) {}
+    }
 
     lastApiTurnTimestamp = Date.now();
     const isNewSession = msg.is_new_session !== false;
@@ -271,79 +309,124 @@ async function handleIncomingMessage(msg) {
 
     if (window.GeminiStatusHUD) window.GeminiStatusHUD.setGenerating(turnId, model, sessionTag);
 
+    const settings = await getStoredSettings();
+
+    // Execution with single-retry on failure
+    let attempt = 0;
+    let turnSuccess = false;
+    let lastError = null;
+
+    while (attempt < 2 && !turnSuccess) {
+      attempt++;
+      try {
+        // Step A: Auto-dismiss modals on ChatGPT guest mode
+        if (settings.autoDismissModals && controller.dismissLoginModals) {
+          controller.dismissLoginModals();
+        }
+
+        // Step B: New chat if requested or preferred
+        if ((settings.forceNewChat || msg.force_new_chat) && controller.startNewChatIfAvailable) {
+          console.log("[WebChat Bridge] Opening fresh chat before turn...");
+          controller.startNewChatIfAvailable();
+          await sleep(attempt === 1 ? 800 : 1500);
+        }
+
+        // Step C: Wait for idle & ready
+        if (controller.waitForIdleAndReady) {
+          await controller.waitForIdleAndReady(6000);
+        }
+
+        // Step D: Snapshot prior responses
+        extractor.snapshotBeforeTurn(turnId);
+
+        // Step E: Model switch if supported
+        if (controller.switchModelIfAvailable) {
+          await controller.switchModelIfAvailable(model);
+        }
+
+        // Step F: Inject prompt and click send
+        await controller.submitPromptWithRetry(promptText);
+
+        // Step G: Stream response
+        await streamResponseTurn(turnId, promptText, controller, extractor);
+
+        turnSuccess = true;
+      } catch (err) {
+        lastError = err;
+        console.warn(`[WebChat Bridge] Attempt ${attempt} failed:`, err);
+        if (attempt === 1) {
+          console.log("[WebChat Bridge] Attempting auto-retry once after 1s debounce...");
+          await sleep(1000);
+        }
+      }
+    }
+
+    // After turns finish
     try {
-      // 0. Only trigger new chat if explicitly requested via force_new_chat (avoid breaking ongoing tasks)
-      if (msg.force_new_chat && window.GeminiController && window.GeminiController.startNewChatIfAvailable) {
-        console.log("[Gemini Bridge] Explicit new chat requested; opening fresh chat on Gemini Web...");
-        window.GeminiController.startNewChatIfAvailable();
-        await sleep(1000);
+      if (isGemini) {
+        window.postMessage({ source: "webchat2local-content", type: "W2L_CLEAR_ACTIVE_REQUEST" }, "*");
       }
+    } catch (_) {}
+    isGeneratingResponse = false;
+    activeTurnId = null;
 
-      // 1. Wait for screen / DOM state to be completely idle & ready before starting turn
-      if (window.GeminiController.waitForIdleAndReady) {
-        await window.GeminiController.waitForIdleAndReady(6000);
-      }
-
-      // IMPORTANT: mark the existing Gemini answers before submitting.
-      // Gemini keeps previous turns in the DOM, so without this snapshot the
-      // extractor can immediately select the previous answer.
-      window.GeminiExtractor.snapshotBeforeTurn(turnId);
-
-      // 2. Switch model if UI supports it
-      if (window.GeminiController.switchModelIfAvailable) {
-        await window.GeminiController.switchModelIfAvailable(model);
-      }
-
-      // 3. Inject and submit prompt (with idle wait and send button polling)
-      await window.GeminiController.submitPromptWithRetry(promptText);
-
-      // 4. Stream response for this new turn only
-      await streamResponseTurn(turnId, promptText);
-    } catch (err) {
-      console.error("[Gemini Bridge] Turn execution failed:", err);
+    if (!turnSuccess) {
+      console.error("[WebChat Bridge] Turn execution failed after retry:", lastError);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: "error",
           turn_id: turnId,
-          error: err.message || String(err),
+          error: lastError.message || String(lastError),
         }));
       }
       if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
-    } finally {
-      try { window.postMessage({ source: "webchat2local-content", type: "W2L_CLEAR_ACTIVE_REQUEST" }, "*"); } catch (_) {}
-      isGeneratingResponse = false;
-      activeTurnId = null;
+    } else {
+      // Step H: Mandatory single-turn reload if configured (for unlogged-in guest hygiene)
+      if (settings.autoReload) {
+        console.log("[WebChat Bridge] Auto Reload enabled. Cleaning up page state in 600ms...");
+        setTimeout(() => {
+          if (controller.reloadPageCleanly) {
+            controller.reloadPageCleanly();
+          } else {
+            window.location.reload();
+          }
+        }, 600);
+      }
     }
   }
 }
 
-async function streamResponseTurn(turnId, promptSnippet) {
+async function streamResponseTurn(turnId, promptSnippet, controller, extractor) {
   isGeneratingResponse = true;
   const deadline = Date.now() + TURN_DEADLINE_MS;
   let lastText = "";
   let lastThought = "";
   let targetEl = null;
 
-  // Phase 1: Wait up to 20s for Gemini Web to create the new turn element or start generation
-  console.log(`[Gemini Bridge] Waiting for turn ${turnId} to start on Gemini Web...`);
-  console.log(`[Gemini Bridge][LOCAL-TRACE] turn_start id=${turnId} prompt_len=${promptSnippet.length}`);
+  console.log(`[WebChat Bridge] Waiting for turn ${turnId} to start on ${currentPlatform}...`);
 
   let turnStarted = false;
   for (let i = 0; i < 200; i++) {
     await sleep(100);
 
-    const domErr = document.querySelector("div[role='alert'], .error-message, [data-test-id*='error'], .toast-error, .banner-error");
-    if (domErr && domErr.offsetParent !== null) {
-      const errText = (domErr.innerText || "").trim();
-      if (/發生錯誤|Something went wrong|error\s*\d+|無法處理/i.test(errText)) {
-        throw new Error(`Gemini Web 介面顯示錯誤: ${errText}`);
+    // Check for error banners (Rate limit, Cloudflare, etc.)
+    if (extractor.detectErrorBanner) {
+      const errBanner = extractor.detectErrorBanner();
+      if (errBanner) {
+        throw new Error(`${currentPlatform.toUpperCase()} 介面顯示錯誤: ${errBanner}`);
+      }
+    } else {
+      const domErr = document.querySelector("div[role='alert'], .error-message, [data-test-id*='error'], .toast-error, .banner-error");
+      if (domErr && domErr.offsetParent !== null) {
+        const errText = (domErr.innerText || "").trim();
+        if (/發生錯誤|Something went wrong|error\s*\d+|無法處理|Too many requests/i.test(errText)) {
+          throw new Error(`介面顯示錯誤: ${errText}`);
+        }
       }
     }
 
-    targetEl = window.GeminiExtractor.findCurrentTurnResponseElement();
-    const generating = window.GeminiController.isGenerating();
-
-    if (i % 20 === 0) console.log(`[Gemini Bridge][LOCAL-TRACE] poll id=${turnId} target=${Boolean(targetEl)} generating=${generating}`);
+    targetEl = extractor.findCurrentTurnResponseElement();
+    const generating = controller.isGenerating();
 
     if (targetEl || generating) {
       turnStarted = true;
@@ -352,38 +435,36 @@ async function streamResponseTurn(turnId, promptSnippet) {
   }
 
   if (!turnStarted && !targetEl) {
-    throw new Error("Gemini Web 尚未開始生成回應，請確認網頁輸入框是否正常或刷新網頁。");
+    throw new Error(`${currentPlatform.toUpperCase()} 尚未開始生成回應，請確認網頁輸入框或網路狀態。`);
   }
 
   // Phase 2: If generation started but container element is still loading, wait for it
   if (!targetEl) {
     for (let i = 0; i < 100; i++) {
       await sleep(100);
-      targetEl = window.GeminiExtractor.findCurrentTurnResponseElement();
+      targetEl = extractor.findCurrentTurnResponseElement();
       if (targetEl) break;
     }
   }
 
   let idleRounds = 0;
-  const maxIdleRounds = 12; // 12 * 80ms = ~1.0 second stabilization debounce
+  const maxIdleRounds = isChatGPT ? 15 : 12; // 15 * 80ms = 1.2s stabilization debounce
 
-  // Phase 3: Pure DOM-centric streaming directly from the turn's response text box
+  // Phase 3: Pure DOM-centric streaming
   while (isGeneratingResponse) {
-    if (Date.now() >= deadline) throw new Error(`Gemini response exceeded the ${TURN_DEADLINE_MS / 1000}s browser deadline.`);
+    if (Date.now() >= deadline) throw new Error(`回應逾時 (${TURN_DEADLINE_MS / 1000}s)`);
     await sleep(80);
 
-    // Network interception already delivered a complete answer to the local
-    // server.  Do not wait for the DOM to stabilize or emit a second done.
     if (rawForwarded && !isGeneratingResponse) break;
 
     if (!targetEl) {
-      targetEl = window.GeminiExtractor.findCurrentTurnResponseElement();
+      targetEl = extractor.findCurrentTurnResponseElement();
     }
     if (!targetEl) {
       continue;
     }
 
-    const state = window.GeminiExtractor.extractCurrentState(targetEl);
+    const state = extractor.extractCurrentState(targetEl);
     const currentCandidateText = state.text || "";
     const currentCandidateThought = state.thought || "";
 
@@ -391,7 +472,6 @@ async function streamResponseTurn(turnId, promptSnippet) {
     const deltaThought = currentCandidateThought.slice(lastThought.length);
 
     if (deltaText.length > 0 || deltaThought.length > 0) {
-      console.log(`[Gemini Bridge][LOCAL-TRACE] chunk id=${turnId} text_len=${currentCandidateText.length} delta_len=${deltaText.length}`);
       idleRounds = 0;
       if (!rawForwarded && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
@@ -406,13 +486,11 @@ async function streamResponseTurn(turnId, promptSnippet) {
       lastText = currentCandidateText;
       lastThought = currentCandidateThought;
     } else {
-      const isGenerating = window.GeminiController.isGenerating();
-
-      // Only count idle if generation has stopped on the page and some output was already received
-      if (!isGenerating && (lastText.length > 0 || lastThought.length > 0)) {
-        idleRounds++;
+      const isGen = controller.isGenerating();
+      const hasActionButtons = isChatGPT && targetEl && !!targetEl.querySelector("button[data-testid*='copy'], button[aria-label*='Copy'], button[aria-label*='複製']");
+      if ((!isGen || hasActionButtons) && (lastText.length > 0 || lastThought.length > 0)) {
+        idleRounds += (hasActionButtons ? 3 : 1);
         if (idleRounds >= maxIdleRounds) {
-          // Finished!
           break;
         }
       }
@@ -420,21 +498,18 @@ async function streamResponseTurn(turnId, promptSnippet) {
   }
 
   if (rawForwarded) {
-    console.log(`[Gemini Bridge][LOCAL-TRACE] raw_done id=${turnId}; DOM completion suppressed.`);
     if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
     return;
   }
 
   if (lastText.trim().length === 0) {
-    console.error(`[Gemini Bridge][LOCAL-TRACE] EMPTY_DONE id=${turnId}`);
-    throw new Error("Gemini 完成了要求，但沒有取得任何 assistant 文字；已拒絕送出空 done。");
+    throw new Error("生成完畢，但未能擷取到文字回應。");
   }
 
-  // Phase 4: Release locks BEFORE sending done event to eliminate race condition
+  // Phase 4: Emit completion
   isGeneratingResponse = false;
   activeTurnId = null;
   if (ws && ws.readyState === WebSocket.OPEN) {
-    console.log(`[Gemini Bridge][LOCAL-TRACE] done_send id=${turnId} text_len=${lastText.length}`);
     ws.send(JSON.stringify({
       type: "done",
       turn_id: turnId,
@@ -443,18 +518,17 @@ async function streamResponseTurn(turnId, promptSnippet) {
     }));
   }
 
-  console.log(`[Gemini Bridge] Turn ${turnId} finished (${lastText.length} chars, source=${rawForwarded ? "network" : "dom"}).`);
+  console.log(`[WebChat Bridge] Turn ${turnId} completed (${lastText.length} chars).`);
   if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
 }
 
 /**
- * Extract tool calls from Gemini text response for in-browser MCP Tunnel execution.
+ * Extract tool calls from text response for in-page MCP Tunnel (Gemini only)
  */
 function extractInPageToolCalls(text) {
   const tools = [];
   if (!text || typeof text !== "string") return tools;
 
-  // 1. JSON tool_call
   const jsonMatches = [...text.matchAll(/<tool_call>([\s\S]*?)<\/tool_call>/gi)];
   for (const match of jsonMatches) {
     try {
@@ -467,75 +541,38 @@ function extractInPageToolCalls(text) {
       }
     } catch (_) {}
   }
-  if (tools.length > 0) return tools;
-
-  // 2. Direct XML tag fallback
-  const standardTools = [
-    "execute_command", "run_command", "bash", "terminal",
-    "read_file", "write_to_file", "write_file", "edit_file", "list_dir",
-    "find_files", "grep_search", "get_workspace_status", "doctor"
-  ];
-  for (const st of standardTools) {
-    const regex = new RegExp(`<${st}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/${st}>`, "i");
-    const m = text.match(regex);
-    if (m) {
-      const inner = m[1].trim();
-      const args = {};
-      const paramMatches = [...inner.matchAll(/<([a-zA-Z0-9_-]+)>([\s\S]*?)<\/\1>/g)];
-      if (paramMatches.length > 0) {
-        for (const pm of paramMatches) {
-          args[pm[1].trim()] = pm[2].trim();
-        }
-      } else if (st === "read_file" || st === "view_file") {
-        args.path = inner;
-      } else if (st === "execute_command" || st === "run_command" || st === "bash") {
-        args.command = inner;
-      } else if (st === "list_dir") {
-        args.path = inner || ".";
-      } else {
-        args.content = inner;
-      }
-      tools.push({ name: st, arguments: args });
-      return tools;
-    }
-  }
   return tools;
 }
 
-/**
- * Executes in-page autonomous MCP Tunnel tool loop on Gemini Web.
- */
 async function runInPageMcpTunnelLoop(responseEl) {
   if (!responseEl || isGeneratingResponse || activeTurnId) return;
-  const state = window.GeminiExtractor ? window.GeminiExtractor.extractCurrentState(responseEl) : null;
+  const extractor = getActiveExtractor();
+  const state = extractor ? extractor.extractCurrentState(responseEl) : null;
   const text = state ? state.text : (responseEl.innerText || "");
   const toolCalls = extractInPageToolCalls(text);
 
   if (toolCalls.length === 0) return;
 
-  console.log(`[Gemini Tunnel] Detected in-page tool calls:`, toolCalls);
   for (const tc of toolCalls) {
     try {
       if (window.GeminiStatusHUD) {
-        window.GeminiStatusHUD.setStatus(`🔧 [Tunnel MCP] 執行 ${tc.name}...`, "#3b82f6");
+        window.GeminiStatusHUD.setStatus("generating", `🔧 [Tunnel MCP] 執行 ${tc.name}...`);
       }
       const result = await callLocalMcpTool(tc.name, tc.arguments);
-      console.log(`[Gemini Tunnel] Tool ${tc.name} result:`, result);
-
       const resultText = `<tool_result name="${tc.name}">\n${typeof result === "object" ? JSON.stringify(result, null, 2) : String(result)}\n</tool_result>`;
       
-      // Settle and inject result into Gemini chat box
       await sleep(500);
-      if (window.GeminiController) {
-        const editor = window.GeminiController.setInputText(resultText);
+      const controller = getActiveController();
+      if (controller) {
+        const editor = controller.setInputText(resultText);
         await sleep(300);
-        window.GeminiController.clickSendButton(editor);
+        controller.clickSendButton(editor);
         if (window.GeminiStatusHUD) {
-          window.GeminiStatusHUD.setStatus(`✅ [Tunnel MCP] ${tc.name} 結果已送回 Gemini`, "#10b981");
+          window.GeminiStatusHUD.setConnected(`✅ [Tunnel MCP] ${tc.name} 結果已送回`);
         }
       }
     } catch (err) {
-      console.error(`[Gemini Tunnel] Failed to execute in-page MCP tool ${tc.name}:`, err);
+      console.error(`[WebChat Tunnel] Failed to execute in-page MCP tool ${tc.name}:`, err);
     }
   }
 }
@@ -550,4 +587,3 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
-

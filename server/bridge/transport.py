@@ -127,6 +127,15 @@ def resolve_turn(
             "請開啟 https://gemini.google.com 頁面。"
         )
 
+    # If model is explicitly ChatGPT or browser extension is connected to ChatGPT
+    is_chatgpt_req = "chatgpt" in model.lower() or (hub.is_connected and hub.browser_info.get("platform") == "chatgpt")
+    if is_chatgpt_req:
+        if hub.is_connected:
+            return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session), "extension"
+        raise TransportUnavailable(
+            "已指定 ChatGPT 模型，但瀏覽器擴充套件尚未連線。請在 Chrome 或 Edge 開啟 https://chatgpt.com/ 頁面。"
+        )
+
     # auto mode: Direct-first when cookies configured, extension fallback
     if _direct_ok():
         return direct_stream_generate(
@@ -140,7 +149,6 @@ def resolve_turn(
         return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session), "extension"
 
     raise TransportUnavailable(
-        "Gemini Web 瀏覽器擴充套件未連線，且沒有可用的 cookie 直連設定。"
-        "開啟 https://gemini.google.com 讓擴充套件自動同步 cookie，"
-        "或設定 GEMINI_1PSID / gemini_cookies.json。"
+        "瀏覽器擴充套件未連線 (請開啟 https://chatgpt.com 或 https://gemini.google.com)，"
+        "且沒有可用的 Gemini cookie 直連設定。"
     )

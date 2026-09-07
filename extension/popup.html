@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <style>
     body {
-      width: 300px;
+      width: 320px;
       margin: 0;
       padding: 16px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -20,8 +20,8 @@
       padding-bottom: 8px;
     }
     .logo {
-      width: 20px;
-      height: 20px;
+      width: 22px;
+      height: 22px;
       background: #2563eb;
       color: #fff;
       border-radius: 4px;
@@ -43,30 +43,66 @@
       font-size: 11px;
       margin-bottom: 12px;
     }
+    .settings-group {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 12px;
+    }
+    .settings-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #38bdf8;
+      margin-bottom: 8px;
+    }
+    .setting-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      color: #e4e4e7;
+      cursor: pointer;
+    }
+    .setting-item:last-child {
+      margin-bottom: 0;
+    }
+    .setting-item input[type="checkbox"] {
+      margin-top: 2px;
+      cursor: pointer;
+    }
+    .setting-desc {
+      color: #a1a1aa;
+      font-size: 10px;
+      line-height: 1.3;
+      margin-top: 1px;
+    }
     .btn {
       display: block;
       width: 100%;
       background: #2563eb;
       color: #fff;
       text-align: center;
-      padding: 8px 0;
+      padding: 7px 0;
       border-radius: 6px;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 500;
       text-decoration: none;
       box-sizing: border-box;
       border: none;
       cursor: pointer;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
     }
     .btn:hover {
       background: #1d4ed8;
     }
     .btn.secondary {
-      background: #3f3f46;
+      background: #27272a;
+      color: #d4d4d8;
     }
     .btn.secondary:hover {
-      background: #52525b;
+      background: #3f3f46;
     }
     .btn:disabled {
       opacity: 0.5;
@@ -84,23 +120,51 @@
 </head>
 <body>
   <div class="header">
-    <div class="logo">G</div>
-    <div class="title">Gemini Web to Local Bridge</div>
+    <div class="logo">W</div>
+    <div class="title">WebChat to Local Bridge</div>
   </div>
+
   <div class="status-box">
     <div>伺服器端點: <strong>127.0.0.1:8765/v1</strong></div>
-    <div style="margin-top: 6px; color: #38bdf8; font-weight: 500;">💡 快速指引：</div>
-    <div style="margin-top: 3px; color: #a1a1aa; line-height: 1.4;">
-      • <strong>MCP 模式</strong>：免啟動伺服器，點擊下方「複製 Cookie」或「下載 JSON」即可。<br>
-      • <strong>API 模式</strong>：執行 <code>start_server.bat</code> 啟動本地端點 (8765)。
-    </div>
+    <div id="tab-status" style="margin-top: 6px; color: #a1a1aa;">偵測當前分頁中...</div>
   </div>
-  <button id="btn-capture" class="btn">⚡ 一鍵抓取 Cookie (自動同步/複製)</button>
-  <button id="btn-download-cookie" class="btn secondary">📥 下載 gemini_cookies.json 檔案</button>
+
+  <!-- Settings Group -->
+  <div class="settings-group">
+    <div class="settings-title">⚙️ 未登入模式與對話隔離偏好</div>
+    
+    <label class="setting-item">
+      <input type="checkbox" id="setting-auto-reload">
+      <div>
+        <div><strong>回合後自動重載刷新 (Auto Reload)</strong></div>
+        <div class="setting-desc">拿到回傳後自動刷新/跳轉頁面，徹底清空 DOM 與對話歷史，杜絕痕跡殘留。</div>
+      </div>
+    </label>
+
+    <label class="setting-item">
+      <input type="checkbox" id="setting-force-new-chat">
+      <div>
+        <div><strong>回合前點擊新對話 (Force New Chat)</strong></div>
+        <div class="setting-desc">收到請求前主動點擊新對話按鈕，確保每輪由空白會話起始。</div>
+      </div>
+    </label>
+
+    <label class="setting-item">
+      <input type="checkbox" id="setting-auto-dismiss">
+      <div>
+        <div><strong>自動關閉未登入登入提示 (Auto Dismiss)</strong></div>
+        <div class="setting-desc">在未登入訪客模式下，自動點擊「保持登出 (Stay logged out)」或關閉彈窗。</div>
+      </div>
+    </label>
+  </div>
+
+  <!-- Actions -->
+  <button id="btn-capture" class="btn">⚡ 一鍵抓取 Gemini Cookie (免開瀏覽器)</button>
   <button id="btn-copy-cookie" class="btn secondary">📋 複製 Cookie JSON 到剪貼簿</button>
-  <button id="btn-copy-config" class="btn" style="background: #059669;">📋 複製 Kilo / Cline 推薦配置</button>
-  <a href="http://127.0.0.1:8765" target="_blank" class="btn secondary" style="font-size: 11px; padding: 6px 0;">開啟控制儀表板 (需啟動伺服器)</a>
+  <button id="btn-copy-config" class="btn" style="background: #059669;">📋 複製 IDE 配置 (OpenAI 格式)</button>
+  <a href="http://127.0.0.1:8765" target="_blank" class="btn secondary" style="font-size: 11px; padding: 6px 0;">開啟本地控制面板 (8765)</a>
   <div id="msg" class="msg"></div>
+
   <script src="popup.js"></script>
 </body>
 </html>

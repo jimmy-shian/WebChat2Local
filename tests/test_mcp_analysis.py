@@ -143,11 +143,22 @@ async def test_mcp_server_registered_tools():
     # Verify all expected analysis tools are registered in MCPServer
     tool_names = [t.name for t in await mcp.list_tools()]
     expected_tools = [
+        "webchat_analyze_code",
+        "webchat_ask",
+        "webchat_multimodal_inspect",
+        "webchat_web_search",
         "gemini_analyze_code",
         "gemini_ask",
         "gemini_multimodal_inspect",
         "gemini_web_search",
         "ask_gemini_web",
+        "mcp_doctor",
+    ]
+    for exp in expected_tools:
+        assert exp in tool_names, f"Expected tool '{exp}' not found in registered MCP tools: {tool_names}"
+
+    # Verify filesystem and shell tools are excluded per user simplification requirement
+    excluded_tools = [
         "mcp_read_file",
         "mcp_write_file",
         "mcp_edit_file",
@@ -155,7 +166,6 @@ async def test_mcp_server_registered_tools():
         "mcp_find_files",
         "mcp_grep_search",
         "mcp_run_command",
-        "mcp_doctor",
     ]
-    for exp in expected_tools:
-        assert exp in tool_names, f"Expected tool '{exp}' not found in registered MCP tools: {tool_names}"
+    for exc in excluded_tools:
+        assert exc not in tool_names, f"Tool '{exc}' should not be exposed in simplified MCP server."

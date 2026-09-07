@@ -330,8 +330,8 @@ class DirectGeminiEngine:
             if chunk.text:
                 accumulated_text = chunk.text
 
-        final_text = (last_chunk.text if last_chunk else accumulated_text).strip()
-        final_thought = (last_chunk.thoughts if last_chunk else accumulated_thought).strip()
+        final_text = ((last_chunk.text if last_chunk else accumulated_text) or "").strip()
+        final_thought = ((last_chunk.thoughts if last_chunk else accumulated_thought) or "").strip()
 
         if last_chunk and getattr(last_chunk, "images", None):
             img_markdowns = [f"![image]({img.url})" for img in last_chunk.images if getattr(img, "url", None)]

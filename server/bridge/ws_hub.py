@@ -171,13 +171,18 @@ class BrowserWebSocketHub:
 
         if msg_type in ("ready", "status"):
             meta = data.get("meta", {})
+            url = str(meta.get("url", ""))
+            plat = meta.get("platform")
+            if not plat:
+                plat = "chatgpt" if "chatgpt" in url else "gemini"
             self.browser_info.update({
                 "connected": True,
-                "page_url": meta.get("url"),
-                "model_name": meta.get("model", "Google Gemini Web"),
+                "page_url": url or None,
+                "platform": plat,
+                "model_name": meta.get("model", "WebChat Web"),
                 "last_seen": time.time(),
             })
-            self.logs.log("DEBUG", "BROWSER", f"Browser status update: {self.browser_info.get('model_name')}")
+            self.logs.log("DEBUG", "BROWSER", f"Browser status update: {self.browser_info.get('model_name')} ({plat})")
             return
 
         if msg_type == "pong":

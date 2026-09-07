@@ -1,7 +1,10 @@
 """
-Gemini Analysis MCP Server - Model Context Protocol (MCP) for Cline, Kilo, Cursor & Antigravity.
-Exposes Google Gemini Web as high-power sub-tools for deep code review, repository architecture
-analysis, multimodal image inspection, and live Google web search.
+WebChat Analysis MCP Server - Model Context Protocol (MCP) for Cline, Kilo, Cursor & Antigravity.
+Exposes Google Gemini Web & ChatGPT Web as dedicated high-power sub-tools for deep code review,
+repository architecture analysis, multimodal inspection, and live web search grounding.
+
+Simplified configuration: purely for outsourced analysis and reasoning consultation.
+Does not expose general local filesystem or shell manipulation tools.
 """
 
 import sys
@@ -17,23 +20,78 @@ from server.mcp.gemini_analysis_tools import (
     inspect_image,
     web_search,
 )
-from server.mcp.tools_filesystem import read_file, write_file, edit_file, list_dir, find_files
-from server.mcp.tools_shell import run_command
-from server.mcp.tools_search import grep_search, find_files as search_find_files
-from server.mcp.tools_system import get_workspace_status, doctor
-from server.browser.gemini_direct import load_cookies, is_configured as direct_is_configured
+from server.mcp.tools_system import doctor
+from server.browser.gemini_direct import load_cookies
+from server.bridge.ws_hub import hub
 
 mcp = MCPServer(
     name="gemini-web-bridge",
     instructions=(
-        "Gemini Analysis MCP Server. Provides Google Gemini Web's massive context (1M+ tokens), "
-        "thinking process, multimodal image inspection, and live web search grounding as specialized "
-        "code & task analysis sub-tools for AI agents."
+        "WebChat Analysis MCP Server (Gemini & ChatGPT). Provides massive context, "
+        "thinking process, multimodal inspection, and live web search grounding as specialized "
+        "outsourced code & task analysis sub-tools for AI agents."
     )
 )
 
 # ==========================================
-# Specialized Gemini Web Analysis Tools
+# Core Universal WebChat Analysis Tools
+# ==========================================
+
+@mcp.tool()
+async def webchat_analyze_code(
+    files: Optional[List[str]] = None,
+    code_snippet: Optional[str] = None,
+    instructions: str = "Perform an in-depth code review, identify potential bugs, architectural flaws, security issues, and propose concrete improvements.",
+    model: str = "webchat/auto",
+) -> str:
+    """
+    Analyzes local project files or code snippets using WebChat (Gemini or ChatGPT).
+    Use this when you need deep code review, architectural critique, bug finding, or refactoring advice.
+    """
+    return await analyze_code(
+        files=files,
+        code_snippet=code_snippet,
+        instructions=instructions,
+        model=model,
+    )
+
+
+@mcp.tool()
+async def webchat_ask(
+    prompt: str,
+    model: str = "webchat/auto",
+) -> str:
+    """
+    Consults WebChat (Gemini or ChatGPT) for complex architecture questions, hard debugging, or algorithm design.
+    """
+    return await ask_gemini(prompt=prompt, model=model)
+
+
+@mcp.tool()
+async def webchat_multimodal_inspect(
+    image_path: str,
+    prompt: str = "Analyze this image, screenshot, or UI mockup. Identify UI components, visual bugs, styling defects, or text contents.",
+    model: str = "gemini-web/flash",
+) -> str:
+    """
+    Inspects a local image file or screenshot (PNG, JPG, WEBP) using WebChat's vision capabilities.
+    """
+    return await inspect_image(image_path=image_path, prompt=prompt, model=model)
+
+
+@mcp.tool()
+async def webchat_web_search(
+    query: str,
+    instructions: Optional[str] = None,
+) -> str:
+    """
+    Performs a real-time web search for latest documentation, APIs, or bug solutions.
+    """
+    return await web_search(query=query, instructions=instructions)
+
+
+# ==========================================
+# Backward Compatibility Aliases (Gemini)
 # ==========================================
 
 @mcp.tool()
@@ -43,10 +101,7 @@ async def gemini_analyze_code(
     instructions: str = "Perform an in-depth code review, identify potential bugs, architectural flaws, security issues, and propose concrete improvements.",
     model: str = "gemini-web/pro",
 ) -> str:
-    """
-    Analyzes local project files, directory codebases, or raw diff snippets using Gemini's massive context window.
-    Use this when you need deep code review, architectural critique, bug finding, or refactoring advice.
-    """
+    """Compatibility alias for webchat_analyze_code."""
     return await analyze_code(
         files=files,
         code_snippet=code_snippet,
@@ -60,9 +115,7 @@ async def gemini_ask(
     prompt: str,
     model: str = "gemini-web/pro",
 ) -> str:
-    """
-    Consults Gemini Web with deep thinking process for complex architecture questions, hard debugging, or algorithm design.
-    """
+    """Compatibility alias for webchat_ask."""
     return await ask_gemini(prompt=prompt, model=model)
 
 
@@ -72,9 +125,7 @@ async def gemini_multimodal_inspect(
     prompt: str = "Analyze this image, screenshot, or UI mockup. Identify UI components, visual bugs, styling defects, or text contents.",
     model: str = "gemini-web/flash",
 ) -> str:
-    """
-    Inspects a local image file or screenshot (PNG, JPG, WEBP) using Gemini Web's vision capabilities.
-    """
+    """Compatibility alias for webchat_multimodal_inspect."""
     return await inspect_image(image_path=image_path, prompt=prompt, model=model)
 
 
@@ -83,137 +134,98 @@ async def gemini_web_search(
     query: str,
     instructions: Optional[str] = None,
 ) -> str:
-    """
-    Performs a real-time web search using Google Search grounding for latest documentation, APIs, or bug solutions.
-    """
+    """Compatibility alias for webchat_web_search."""
     return await web_search(query=query, instructions=instructions)
 
 
 @mcp.tool()
 async def ask_gemini_web(prompt: str, model: str = "gemini-web/pro") -> str:
-    """Backward compatibility tool alias for gemini_ask."""
+    """Compatibility alias for webchat_ask."""
     return await ask_gemini(prompt=prompt, model=model)
 
 
 @mcp.tool()
-def gemini_web_models() -> str:
-    """List the supported Gemini Web models available through this bridge."""
+def webchat_models() -> str:
+    """List the supported WebChat models available through this bridge."""
     return json.dumps({
         "models": [
+            {"id": "webchat/auto", "name": "Universal WebChat (Auto Route)", "description": "Auto-dispatches to connected ChatGPT or Gemini tab"},
+            {"id": "chatgpt-web/auto", "name": "ChatGPT Web (Guest / Auto)", "description": "Unlogged-in guest chat with auto-reset hygiene"},
+            {"id": "chatgpt-web/gpt-4o-mini", "name": "ChatGPT Web (GPT-4o mini)", "description": "Default free unlogged-in model"},
             {"id": "gemini-web/pro", "name": "Google Gemini 2.5 Pro (Web)", "supports_thinking": True},
             {"id": "gemini-web/flash", "name": "Google Gemini 2.5 Flash (Web)", "supports_thinking": True},
-            {"id": "gemini-web/flash-thinking", "name": "Google Gemini Flash Thinking (Web)", "supports_thinking": True},
-            {"id": "gemini-web/ultra", "name": "Google Gemini Advanced Ultra (Web)", "supports_thinking": True},
         ]
     }, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def get_gemini_web_status() -> str:
-    """Get the real-time connection status of the Gemini Web bridge and local credentials."""
+def gemini_web_models() -> str:
+    """Compatibility alias for webchat_models."""
+    return webchat_models()
+
+
+@mcp.tool()
+def get_webchat_status() -> str:
+    """Get the real-time connection status of WebChat platforms (ChatGPT and Gemini)."""
     cookies = load_cookies()
     has_psid = bool(cookies.get("1psid"))
+    browser_connected = hub.is_connected
+    active_platform = hub.browser_info.get("platform", "None")
     return json.dumps({
-        "bridge_status": "[READY] Gemini Web Analysis MCP Ready" if has_psid else "[CONFIG_NEEDED] Missing cookies",
-        "cookie_configured": has_psid,
-        "mode": "direct_mcp",
-        "available_models": ["gemini-web/pro", "gemini-web/flash", "gemini-web/ultra"],
+        "bridge_status": "[READY] WebChat Analysis MCP Ready" if (has_psid or browser_connected) else "[WAITING] Connect browser or set cookies",
+        "browser_connected": browser_connected,
+        "browser_platform": active_platform,
+        "gemini_cookie_configured": has_psid,
+        "available_models": ["webchat/auto", "chatgpt-web/auto", "chatgpt-web/gpt-4o-mini", "gemini-web/pro", "gemini-web/flash"],
     }, ensure_ascii=False, indent=2)
 
 
-
-
-# ==========================================
-# Local Workspace Harness Tools
-# ==========================================
-
 @mcp.tool()
-def mcp_read_file(path: str, start_line: Optional[int] = None, end_line: Optional[int] = None) -> str:
-    """Read contents of a file in the workspace."""
-    res = read_file(path, start_line=start_line, end_line=end_line)
-    return json.dumps(res, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def mcp_write_file(path: str, content: str, overwrite: bool = True) -> str:
-    """Write or overwrite content to a file in the workspace."""
-    res = write_file(path, content=content, overwrite=overwrite)
-    return json.dumps(res, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def mcp_edit_file(path: str, search_target: str, replacement: str, allow_multiple: bool = False) -> str:
-    """Perform exact text replacement within a file in the workspace."""
-    res = edit_file(path, search_target=search_target, replacement=replacement, allow_multiple=allow_multiple)
-    return json.dumps(res, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def mcp_list_dir(path: str = ".", max_depth: int = 1) -> str:
-    """List entries inside a directory in the workspace."""
-    res = list_dir(path=path, max_depth=max_depth)
-    return json.dumps(res, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def mcp_find_files(pattern: str = "*", search_dir: str = ".", max_depth: int = 5, max_results: int = 50) -> str:
-    """Find files by glob pattern inside the workspace."""
-    res = search_find_files(
-        pattern=pattern,
-        search_dir=search_dir,
-        max_depth=max_depth,
-        max_results=max_results,
-    )
-    return json.dumps(res, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def mcp_grep_search(query: str, path: str = ".", case_sensitive: bool = False, max_results: int = 50) -> str:
-    """Search for string or regex occurrences across workspace files."""
-    res = grep_search(query=query, path=path, case_sensitive=case_sensitive, max_results=max_results)
-    return json.dumps(res, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def mcp_run_command(command: str, cwd: Optional[str] = None, timeout_seconds: int = 60) -> str:
-    """Execute a command in the workspace."""
-    res = run_command(command=command, cwd=cwd, timeout_seconds=timeout_seconds)
-    return json.dumps(res, ensure_ascii=False, indent=2)
+def get_gemini_web_status() -> str:
+    """Compatibility alias for get_webchat_status."""
+    return get_webchat_status()
 
 
 @mcp.tool()
 def mcp_doctor() -> str:
-    """Run full diagnostics on the MCP server, credentials, and environment."""
+    """Run full diagnostics on the WebChat analysis server, credentials, and environment."""
     res = doctor()
+    res["browser_connected"] = hub.is_connected
+    res["browser_platform"] = hub.browser_info.get("platform")
     return json.dumps(res, ensure_ascii=False, indent=2)
 
 
 def print_doctor_report():
     print("=" * 60)
-    print(" Gemini Analysis MCP Server - Diagnostic Report")
+    print(" WebChat Analysis MCP Server - Diagnostic Report")
     print("=" * 60)
     cookies = load_cookies()
     has_psid = bool(cookies.get("1psid"))
-    print(f"[*] Cookie Configured: {has_psid}")
+    print(f"[*] Gemini Cookie Configured: {has_psid}")
     if has_psid:
         print(f"[*] 1PSID: {cookies['1psid'][:12]}... (Total length: {len(cookies['1psid'])})")
         print(f"[*] 1PSIDTS: {'Configured' if cookies.get('1psidts') else 'Not set'}")
     else:
-        print("[-] Warning: gemini_cookies.json not found or missing __Secure-1PSID.")
-        print("    Run start_server.bat and click '自動抓取 Cookie' in the browser extension,")
-        print("    or create gemini_cookies.json with your cookies.")
+        print("[-] Gemini Cookie: Not set (Gemini web extension or cookies needed for direct Gemini)")
 
-    print("\n[*] Available MCP Tools:")
-    print("    - gemini_analyze_code (Deep file/codebase review)")
-    print("    - gemini_ask (General reasoning and deep thinking consultation)")
-    print("    - gemini_multimodal_inspect (Screenshot and visual UI analysis)")
-    print("    - gemini_web_search (Google search grounding for live documentation)")
-    print("    - mcp_read_file, mcp_write_file, mcp_edit_file, mcp_list_dir, mcp_grep_search, mcp_run_command")
+    print(f"[*] Browser Extension Connected: {hub.is_connected}")
+    if hub.is_connected:
+        print(f"[*] Connected Platform: {hub.browser_info.get('platform')} ({hub.browser_info.get('page_url')})")
+    else:
+        print("[-] Browser Extension: Not currently connected to 127.0.0.1:8765")
+        print("    (You can open https://chatgpt.com in Chrome/Edge with the extension loaded)")
+
+    print("\n[*] Simplified Dedicated Analysis Tools:")
+    print("    - webchat_analyze_code / gemini_analyze_code (Deep code review)")
+    print("    - webchat_ask / gemini_ask (General reasoning consultation)")
+    print("    - webchat_multimodal_inspect / gemini_multimodal_inspect (Visual inspection)")
+    print("    - webchat_web_search / gemini_web_search (Live web search)")
+    print("    - mcp_doctor (System self-diagnostics)")
     print("=" * 60)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Gemini Analysis MCP Server")
+    parser = argparse.ArgumentParser(description="WebChat Analysis MCP Server")
     parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio", help="MCP transport mode (default: stdio)")
     parser.add_argument("--host", default="127.0.0.1", help="Host for SSE transport (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="Port for SSE transport (default: 8765)")
@@ -230,7 +242,7 @@ def main():
     elif args.transport == "sse":
         import uvicorn
         app = mcp.sse_app()
-        print(f"Starting Gemini Analysis MCP Server (SSE) on http://{args.host}:{args.port}")
+        print(f"Starting WebChat Analysis MCP Server (SSE) on http://{args.host}:{args.port}")
         uvicorn.run(app, host=args.host, port=args.port)
 
 

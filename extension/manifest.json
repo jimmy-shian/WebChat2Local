@@ -1,13 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Gemini Web to Local Bridge",
-  "version": "2.0.0",
-  "description": "Bridge Google Gemini Web chat and tool calls to local development tools.",
+  "name": "WebChat to Local Bridge (Gemini & ChatGPT)",
+  "version": "2.1.0",
+  "description": "Bridge Google Gemini Web & ChatGPT Web chat and analysis tools to local development environments.",
   "permissions": ["activeTab", "storage", "cookies", "alarms", "downloads"],
   "host_permissions": [
     "https://gemini.google.com/*",
     "https://*.google.com/*",
     "https://google.com/*",
+    "https://chatgpt.com/*",
+    "https://*.chatgpt.com/*",
+    "https://oaistatic.com/*",
     "http://127.0.0.1:8765/*",
     "ws://127.0.0.1:8765/*"
   ],
@@ -22,12 +25,18 @@
       "world": "MAIN"
     },
     {
-      "matches": ["https://gemini.google.com/*"],
+      "matches": [
+        "https://gemini.google.com/*",
+        "https://chatgpt.com/*",
+        "https://*.chatgpt.com/*"
+      ],
       "js": [
         "markdown_serializer.js",
         "status_hud.js",
         "gemini_controller.js",
         "gemini_extractor.js",
+        "chatgpt_controller.js",
+        "chatgpt_extractor.js",
         "content.js"
       ],
       "css": ["status_hud.css"],
@@ -36,6 +45,6 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Gemini Web to Local Bridge"
+    "default_title": "WebChat to Local Bridge"
   }
 }
