@@ -50,7 +50,7 @@ async function fetchStatus(){
     if(!r.ok)throw 0;
     const d=await r.json(),b=d.browser_info||{},connected=!!d.browser_connected,s=$('status');
     s.className='status '+((connected||d.transport?.direct_configured)?(d.has_active_turn?'busy':'ok'):'bad');
-    $('statusText').textContent=d.has_active_turn?'生成中':(connected?'Gemini Web 已連線':(d.transport?.direct_configured?'直連就緒（Cookie）':'等待連線'));
+    $('statusText').textContent=d.has_active_turn?'生成中':(connected?'Web Chat 已連線':(d.transport?.direct_configured?'直連就緒（Cookie）':'等待連線'));
     $('browserState').textContent=connected?'Connected':'Disconnected';
     $('browserState').className=connected?'green':'red';
     $('tabs').textContent=d.active_tabs??0;
@@ -89,7 +89,7 @@ async function sendDevPrompt(){
   if(isStreaming)return;
   const input=$('promptInput'),prompt=input.value.trim();
   if(!prompt)return;
-  const model=$('modelSelect')?$('modelSelect').value:'gemini-web/pro';
+  const model=$('modelSelect')?$('modelSelect').value:'webchat/auto';
   isStreaming=true;$('sendBtn').disabled=true;input.value='';
   const out=$('chatOutput');
   out.insertAdjacentHTML('beforeend','<div class="msg"><div class="role">YOU</div><div class="bubble user">'+esc(prompt)+'</div></div><div class="msg" id="current"><div class="role">GEMINI · '+esc(model)+'</div><div id="thinking" class="thinking" style="display:none"></div><div id="answer" class="bubble assistant"></div></div>');
@@ -107,7 +107,7 @@ async function sendDevPrompt(){
     const transport=r.headers.get('X-W2L-Transport');
     if(transport){
       const roleEl=$('current').querySelector('.role');
-      if(roleEl)roleEl.textContent='GEMINI · '+esc(model)+' · '+(MODE_LABEL[transport]||transport);
+      if(roleEl)roleEl.textContent='ASSISTANT · '+esc(model)+' · '+(MODE_LABEL[transport]||transport);
     }
     const reader=r.body.getReader(),dec=new TextDecoder();
     let buf='';
@@ -141,7 +141,7 @@ function copyClientConfig(){
     apiProvider: "openai",
     openAiBaseUrl: "http://127.0.0.1:8765/v1",
     openAiApiKey: "sk-local",
-    openAiModelId: "gemini-web/ultra",
+    openAiModelId: "webchat/auto",
     customModelInfo: {
       supportsPromptCache: false,
       maxTokens: 4096,

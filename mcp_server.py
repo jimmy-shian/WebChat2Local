@@ -90,60 +90,6 @@ async def webchat_web_search(
     return await web_search(query=query, instructions=instructions)
 
 
-# ==========================================
-# Backward Compatibility Aliases (Gemini)
-# ==========================================
-
-@mcp.tool()
-async def gemini_analyze_code(
-    files: Optional[List[str]] = None,
-    code_snippet: Optional[str] = None,
-    instructions: str = "Perform an in-depth code review, identify potential bugs, architectural flaws, security issues, and propose concrete improvements.",
-    model: str = "gemini-web/pro",
-) -> str:
-    """Compatibility alias for webchat_analyze_code."""
-    return await analyze_code(
-        files=files,
-        code_snippet=code_snippet,
-        instructions=instructions,
-        model=model,
-    )
-
-
-@mcp.tool()
-async def gemini_ask(
-    prompt: str,
-    model: str = "gemini-web/pro",
-) -> str:
-    """Compatibility alias for webchat_ask."""
-    return await ask_gemini(prompt=prompt, model=model)
-
-
-@mcp.tool()
-async def gemini_multimodal_inspect(
-    image_path: str,
-    prompt: str = "Analyze this image, screenshot, or UI mockup. Identify UI components, visual bugs, styling defects, or text contents.",
-    model: str = "gemini-web/flash",
-) -> str:
-    """Compatibility alias for webchat_multimodal_inspect."""
-    return await inspect_image(image_path=image_path, prompt=prompt, model=model)
-
-
-@mcp.tool()
-async def gemini_web_search(
-    query: str,
-    instructions: Optional[str] = None,
-) -> str:
-    """Compatibility alias for webchat_web_search."""
-    return await web_search(query=query, instructions=instructions)
-
-
-@mcp.tool()
-async def ask_gemini_web(prompt: str, model: str = "gemini-web/pro") -> str:
-    """Compatibility alias for webchat_ask."""
-    return await ask_gemini(prompt=prompt, model=model)
-
-
 @mcp.tool()
 def webchat_models() -> str:
     """List the supported WebChat models available through this bridge."""
@@ -156,12 +102,6 @@ def webchat_models() -> str:
             {"id": "gemini-web/flash", "name": "Google Gemini 2.5 Flash (Web)", "supports_thinking": True},
         ]
     }, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def gemini_web_models() -> str:
-    """Compatibility alias for webchat_models."""
-    return webchat_models()
 
 
 @mcp.tool()
@@ -178,12 +118,6 @@ def get_webchat_status() -> str:
         "gemini_cookie_configured": has_psid,
         "available_models": ["webchat/auto", "chatgpt-web/auto", "chatgpt-web/gpt-4o-mini", "gemini-web/pro", "gemini-web/flash"],
     }, ensure_ascii=False, indent=2)
-
-
-@mcp.tool()
-def get_gemini_web_status() -> str:
-    """Compatibility alias for get_webchat_status."""
-    return get_webchat_status()
 
 
 @mcp.tool()
@@ -216,10 +150,12 @@ def print_doctor_report():
         print("    (You can open https://chatgpt.com in Chrome/Edge with the extension loaded)")
 
     print("\n[*] Simplified Dedicated Analysis Tools:")
-    print("    - webchat_analyze_code / gemini_analyze_code (Deep code review)")
-    print("    - webchat_ask / gemini_ask (General reasoning consultation)")
-    print("    - webchat_multimodal_inspect / gemini_multimodal_inspect (Visual inspection)")
-    print("    - webchat_web_search / gemini_web_search (Live web search)")
+    print("    - webchat_analyze_code (Deep code review)")
+    print("    - webchat_ask (General reasoning consultation)")
+    print("    - webchat_multimodal_inspect (Visual inspection)")
+    print("    - webchat_web_search (Live web search)")
+    print("    - webchat_models (Model catalog)")
+    print("    - get_webchat_status (Connection status)")
     print("    - mcp_doctor (System self-diagnostics)")
     print("=" * 60)
 

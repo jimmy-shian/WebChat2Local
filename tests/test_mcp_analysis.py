@@ -147,13 +147,23 @@ async def test_mcp_server_registered_tools():
         "webchat_ask",
         "webchat_multimodal_inspect",
         "webchat_web_search",
+        "webchat_models",
+        "get_webchat_status",
+        "mcp_doctor",
+    ]
+
+    # Verify backward-compat aliases have been removed
+    removed_tools = [
         "gemini_analyze_code",
         "gemini_ask",
         "gemini_multimodal_inspect",
         "gemini_web_search",
         "ask_gemini_web",
-        "mcp_doctor",
+        "gemini_web_models",
+        "get_gemini_web_status",
     ]
+    for old in removed_tools:
+        assert old not in tool_names, f"Compatibility alias '{old}' should have been removed."
     for exp in expected_tools:
         assert exp in tool_names, f"Expected tool '{exp}' not found in registered MCP tools: {tool_names}"
 

@@ -19,7 +19,7 @@
 │  ├─ Prompt Compiler         System 指令 + 工具規格 + 多輪歷史   │
 │  ├─ Stream Adapter          SSE Token & Thinking 多工解碼器     │
 │  ├─ WebSocket Hub & Queue   :8765/ws 連線管理與路由            │
-│  ├─ Stdio MCP Server        gemini-web-bridge (ask_gemini_web) │
+│  ├─ Stdio MCP Server        gemini-web-bridge (webchat_ask) │
 │  └─ OpenDesign Dark Dashboard  監控面板 (/)                    │
 └────────────────────────────┬───────────────────────────────────┘
                              │ WebSocket JSON / Heartbeat
@@ -50,7 +50,7 @@
 | `src/model-catalog.ts` & `src/chatgpt-web-models.ts` | `server/model_catalog.py` | 模型：`gemini-web/pro` (2.5 Pro)、`gemini-web/flash`、`gemini-web/flash-thinking`、`gemini-web/ultra`、`gemini-web/auto` |
 | `src/adapters/chatgpt-web/prompt.ts` | `server/bridge/prompt_compiler.py` & `session_manager.py` | 編譯 client system instructions、developer prompts、多輪歷史、圖片附件、工具呼叫為結構化 Gemini Web 格式 |
 | `src/adapters/chatgpt-web/browser-worker.ts` | `extension/*` & `server/browser/*` | Chrome/Edge MV3 擴充套件：MutationObserver 串流、文字注入、模型切換下拉、浮動 HUD |
-| `src/adapters/chatgpt-web/mcp-server.ts` | `mcp_server.py` & `server/mcp/*` | MCP 伺服器：`ask_gemini_web`、`get_gemini_web_status`、`gemini_web_models`、完整工作區工具鏈 |
+| `src/adapters/chatgpt-web/mcp-server.ts` | `mcp_server.py` & `server/mcp/*` | MCP 伺服器：`webchat_ask`、`get_webchat_status`、`webchat_models`、完整工作區工具鏈 |
 | `src/doctor.ts` | `server/doctor.py` | 診斷工具：Python venv、port 監聽、瀏覽器擴充套件連線、Antigravity MCP 註冊 |
 | `src/setup.ts` | `server/antigravity/installer.py` & `setup_antigravity.py` | 1-Click 安裝器：配置 `.agents/mcp_config.json`、`.agents/rules/gemini_rules.md`、`.agents/skills/gemini-bridge/SKILL.md` |
 | `src/cli.ts` | `server/cli.py` & `run_server.py` | CLI：`start`、`status`、`doctor`、`mcp`、`setup`、`chat` 指令 |
@@ -155,9 +155,9 @@ POST https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendSer
 
 - **Transport**：stdio (Antigravity/Cline 原生支援)
 - **Tools**：
-  - `ask_gemini_web`：完整 Prompt → Gemini Web → 回傳文字 + Thinking
-  - `get_gemini_web_status`：WebSocket 連線狀態、模型、佇列長度
-  - `gemini_web_models`：模型目錄
+  - `webchat_ask`：完整 Prompt → Gemini Web → 回傳文字 + Thinking
+  - `get_webchat_status`：WebSocket 連線狀態、模型、佇列長度
+  - `webchat_models`：模型目錄
   - `mcp_read_file` / `mcp_write_file` / `mcp_edit_file` / `mcp_list_dir` / `mcp_grep_search` / `mcp_run_command` / `mcp_doctor`：工作區完整操作
 
 ### 4.7 Antigravity Installer (`setup_antigravity.py`)
@@ -167,7 +167,7 @@ POST https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendSer
 .agents/
 ├── mcp_config.json          # MCP 伺服器註冊
 ├── rules/
-│   └── gemini_rules.md      # 存取規則：何時用 ask_gemini_web
+│   └── gemini_rules.md      # 存取規則：何時用 webchat_ask
 └── skills/
     └── gemini-bridge/
         └── SKILL.md         # 技能定義：工具參數、範例、最佳實踐

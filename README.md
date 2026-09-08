@@ -26,10 +26,10 @@ By transforming WebChat2Local into a Model Context Protocol (MCP) server:
 
 | MCP Tool | Description | Key Capabilities |
 | :--- | :--- | :--- |
-| `gemini_analyze_code` | **Deep Codebase & File Review** | Analyze multiple local files or code snippets for architecture issues, edge-case bugs, and optimizations. |
-| `gemini_ask` | **Deep Thinking Consultation** | Query Gemini 2.5 Pro / Flash Thinking with chain-of-thought reasoning process for complex algorithmic or architectural questions. |
-| `gemini_multimodal_inspect` | **Multimodal Vision & UI Review** | Pass local images or UI screenshots to Gemini vision for frontend styling analysis, visual bug detection, or diagram interpretation. |
-| `gemini_web_search` | **Live Web Grounding** | Query Gemini grounded with real-time Google Web Search for latest libraries, framework documentation, and live APIs. |
+| `webchat_analyze_code` | **Deep Codebase & File Review** | Analyze multiple local files or code snippets for architecture issues, edge-case bugs, and optimizations. |
+| `webchat_ask` | **Deep Thinking Consultation** | Query Gemini 2.5 Pro / Flash Thinking with chain-of-thought reasoning process for complex algorithmic or architectural questions. |
+| `webchat_multimodal_inspect` | **Multimodal Vision & UI Review** | Pass local images or UI screenshots to Gemini vision for frontend styling analysis, visual bug detection, or diagram interpretation. |
+| `webchat_web_search` | **Live Web Grounding** | Query Gemini grounded with real-time Google Web Search for latest libraries, framework documentation, and live APIs. |
 | `mcp_read_file` / `mcp_write_file` / `mcp_edit_file` | **Workspace File Ops** | Read, write, and patch files within the local project workspace. |
 | `mcp_list_dir` / `mcp_grep_search` / `mcp_find_files` | **Workspace Search** | Fast recursive file listing, regex search, and file discovery. |
 | `mcp_run_command` | **Workspace Terminal** | Execute safe diagnostic and build commands in PowerShell. |
@@ -53,10 +53,10 @@ Add to your Cline MCP settings (`cline_mcp_settings.json`):
         "W2L_WORKSPACE": "${workspaceFolder}"
       },
       "autoApprove": [
-        "gemini_analyze_code",
-        "gemini_ask",
-        "gemini_multimodal_inspect",
-        "gemini_web_search"
+        "webchat_analyze_code",
+        "webchat_ask",
+        "webchat_multimodal_inspect",
+        "webchat_web_search"
       ]
     }
   }

@@ -10,10 +10,10 @@
       },
       "disabled": false,
       "autoApprove": [
-        "gemini_analyze_code",
-        "gemini_ask",
-        "gemini_multimodal_inspect",
-        "gemini_web_search"
+        "webchat_analyze_code",
+        "webchat_ask",
+        "webchat_multimodal_inspect",
+        "webchat_web_search"
       ]
     }
   }

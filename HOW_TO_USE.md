@@ -42,7 +42,7 @@
 專案已於 `mcp_configs/` 內建範本，可直接複製：
 
 ### 2.1 Cline / Roo Code (VS Code 擴充套件)
-在 VS Code 中開啟 Cline 設定 (齒輪) $ightarrow$ **MCP Servers** $ightarrow$ **Edit MCP Settings** (`cline_mcp_settings.json`)：
+在 VS Code 中開啟 Cline 設定 (齒輪) → **MCP Servers** → **Edit MCP Settings** (`cline_mcp_settings.json`)：
 ```json
 {
   "mcpServers": {
@@ -55,10 +55,10 @@
         "W2L_WORKSPACE": "${workspaceFolder}"
       },
       "autoApprove": [
-        "gemini_analyze_code",
-        "gemini_ask",
-        "gemini_multimodal_inspect",
-        "gemini_web_search"
+        "webchat_analyze_code",
+        "webchat_ask",
+        "webchat_multimodal_inspect",
+        "webchat_web_search"
       ]
     }
   }
@@ -73,7 +73,7 @@
 - 或直接匯入 `mcp_configs/kilo_mcp_settings.json`。
 
 ### 2.3 Cursor IDE
-開啟 `~/.cursor/mcp.json` 或 Cursor Settings $ightarrow$ Features $ightarrow$ MCP：
+開啟 `~/.cursor/mcp.json` 或 Cursor Settings → Features → MCP：
 ```json
 {
   "mcpServers": {
@@ -114,25 +114,25 @@
 
 掛載完成後，你的主模型（Claude / GPT-4o 等）會自動感知並呼叫下列工具：
 
-### 3.1 程式碼深層審查 (`gemini_analyze_code`)
+### 3.1 程式碼深層審查 (`webchat_analyze_code`)
 - **使用時機**：需要一次性審查多個大型檔案、尋找競態條件 (Race Condition)、邏輯漏洞或架構重構建議。
 - **範例提問**：
-  > 「請幫我調用 `gemini_analyze_code` 分析 `server/browser/gemini_direct.py` 和 `server/mcp/gemini_analysis_tools.py`，找出任何可能導致死鎖或未捕捉異常的漏洞。」
+  > 「請幫我調用 `webchat_analyze_code` 分析 `server/browser/gemini_direct.py` 和 `server/mcp/gemini_analysis_tools.py`，找出任何可能導致死鎖或未捕捉異常的漏洞。」
 
-### 3.2 深度思考諮詢 (`gemini_ask`)
+### 3.2 深度思考諮詢 (`webchat_ask`)
 - **使用時機**：複雜演算法設計、架構選型、推導問題。
 - **範例提問**：
-  > 「請調用 `gemini_ask`，以 Thinking 模式深入推導如何在 Windows 上實現無損記憶體日誌與防溢位環狀緩衝區的最佳架構。」
+  > 「請調用 `webchat_ask`，以 Thinking 模式深入推導如何在 Windows 上實現無損記憶體日誌與防溢位環狀緩衝區的最佳架構。」
 
-### 3.3 本機圖片/截圖排錯 (`gemini_multimodal_inspect`)
+### 3.3 本機圖片/截圖排錯 (`webchat_multimodal_inspect`)
 - **使用時機**：UI 畫面走樣、排版重疊、截圖錯誤分析。
 - **範例提問**：
-  > 「請用 `gemini_multimodal_inspect` 分析這張截圖 `tests/fixtures/error_ui.png`，指出按鈕錯位的原因。」
+  > 「請用 `webchat_multimodal_inspect` 分析這張截圖 `tests/fixtures/error_ui.png`，指出按鈕錯位的原因。」
 
-### 3.4 即時聯網搜尋 (`gemini_web_search`)
+### 3.4 即時聯網搜尋 (`webchat_web_search`)
 - **使用時機**：查詢最新釋出的套件 API 規格、最新修補版本或官方文件。
 - **範例提問**：
-  > 「請調用 `gemini_web_search` 搜尋 MCP Python SDK 2.x 的 `MCPServer` 最新 tools 註冊語法與 breaking changes。」
+  > 「請調用 `webchat_web_search` 搜尋 MCP Python SDK 2.x 的 `MCPServer` 最新 tools 註冊語法與 breaking changes。」
 
 ---
 

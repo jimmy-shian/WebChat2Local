@@ -26,10 +26,10 @@
 
 | MCP 工具名稱 | 功能描述 | 核心優勢 |
 | :--- | :--- | :--- |
-| `gemini_analyze_code` | **多檔案/程式碼深度審查** | 支援指定多個本地檔案路徑或程式碼片段，由 Gemini 進行邏輯漏洞、架構缺陷與邊界情況分析。 |
-| `gemini_ask` | **深度思考諮詢** | 呼叫 Gemini 2.5 Pro / Flash Thinking 取得包含 Chain-of-Thought (思考過程) 的演算法與架構諮詢。 |
-| `gemini_multimodal_inspect` | **多模態視覺與 UI 檢閱** | 讀取本機截圖或圖片檔（PNG/JPG/WEBP），交由 Gemini 視覺能力分析畫面排版、樣式差異或圖表問題。 |
-| `gemini_web_search` | **Google 即時聯網檢索** | 啟用 Google Grounding 搜尋最新套件文件、API 規格與網路資料。 |
+| `webchat_analyze_code` | **多檔案/程式碼深度審查** | 支援指定多個本地檔案路徑或程式碼片段，由 Gemini 進行邏輯漏洞、架構缺陷與邊界情況分析。 |
+| `webchat_ask` | **深度思考諮詢** | 呼叫 Gemini 2.5 Pro / Flash Thinking 取得包含 Chain-of-Thought (思考過程) 的演算法與架構諮詢。 |
+| `webchat_multimodal_inspect` | **多模態視覺與 UI 檢閱** | 讀取本機截圖或圖片檔（PNG/JPG/WEBP），交由 Gemini 視覺能力分析畫面排版、樣式差異或圖表問題。 |
+| `webchat_web_search` | **Google 即時聯網檢索** | 啟用 Google Grounding 搜尋最新套件文件、API 規格與網路資料。 |
 | `mcp_read_file` / `mcp_write_file` / `mcp_edit_file` | **工作區檔案讀寫** | 在本地工作區安全讀取、寫入與修改專案檔案。 |
 | `mcp_list_dir` / `mcp_grep_search` / `mcp_find_files` | **工作區快速檢索** | 高速遞迴目錄樹、正則全文檢索與檔名搜尋。 |
 | `mcp_run_command` | **工作區指令執行** | 安全執行本機 PowerShell 診斷與建置指令。 |
@@ -53,10 +53,10 @@
         "W2L_WORKSPACE": "${workspaceFolder}"
       },
       "autoApprove": [
-        "gemini_analyze_code",
-        "gemini_ask",
-        "gemini_multimodal_inspect",
-        "gemini_web_search"
+        "webchat_analyze_code",
+        "webchat_ask",
+        "webchat_multimodal_inspect",
+        "webchat_web_search"
       ]
     }
   }

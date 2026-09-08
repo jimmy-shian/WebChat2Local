@@ -18,7 +18,7 @@ os.environ["W2L_WORKSPACE"] = os.getcwd()
 PYTHON_EXE = sys.executable
 MCP_SCRIPT = str(PROJECT_ROOT / "mcp_server.py")
 
-from mcp_server import mcp, gemini_web_models
+from mcp_server import mcp, webchat_models
 from server.mcp.tools_filesystem import (
     read_file, write_file, edit_file, delete_file, list_dir, find_files, _resolve_safe_path
 )
@@ -35,8 +35,8 @@ def test_mcp_server_name():
     assert mcp.name == "gemini-web-bridge"
 
 
-def test_gemini_web_models_catalog():
-    models_json = gemini_web_models()
+def test_webchat_models_catalog():
+    models_json = webchat_models()
     data = json.loads(models_json)
     assert "models" in data
     assert any(m["id"] == "gemini-web/pro" for m in data["models"])
@@ -105,9 +105,9 @@ def test_mcp_server_initialize_and_tools():
         tools_data = json.loads(tools_resp_line.strip())
         assert tools_data.get("id") == 2
         tool_names = [t["name"] for t in tools_data["result"]["tools"]]
-        assert "ask_gemini_web" in tool_names
-        assert "get_gemini_web_status" in tool_names
-        assert "gemini_web_models" in tool_names
+        assert "webchat_ask" in tool_names
+        assert "get_webchat_status" in tool_names
+        assert "webchat_models" in tool_names
 
     finally:
         proc.kill()

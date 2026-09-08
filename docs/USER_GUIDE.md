@@ -80,10 +80,10 @@ start_server.bat
         "W2L_WORKSPACE": "${workspaceFolder}"
       },
       "autoApprove": [
-        "gemini_analyze_code",
-        "gemini_ask",
-        "gemini_multimodal_inspect",
-        "gemini_web_search"
+        "webchat_analyze_code",
+        "webchat_ask",
+        "webchat_multimodal_inspect",
+        "webchat_web_search"
       ]
     }
   }
@@ -195,13 +195,13 @@ Settings → Provider：`OpenAI Compatible`
 可用 MCP 工具：
 | 工具 | 說明 | 核心特點 |
 |------|------|----------|
-| `gemini_analyze_code` | 多檔案/程式碼深度審核 | 指定多檔案路徑，由 Gemini 檢查架構與邊界漏洞 |
-| `gemini_ask` | 深度思考諮詢 | 向 Gemini 2.5 Pro / Flash Thinking 提問獲取思考過程 |
-| `gemini_multimodal_inspect` | 多模態圖片檢閱 | 讀取本機 UI 截圖或架構圖進行視覺分析與排錯 |
-| `gemini_web_search` | Google 即時聯網搜尋 | 結合 Google Search Grounding 檢索即時文件與 API |
-| `ask_gemini_web` | 相容性舊版查詢接口 | 向 Gemini Web 提問取得回覆與思考過程 |
-| `get_gemini_web_status` | 服務狀態檢查 | 取得後端與直連引擎健康度 |
-| `gemini_web_models` | 模型清單 | 列出所有可用模型與上下文資訊 |
+| `webchat_analyze_code` | 多檔案/程式碼深度審核 | 指定多檔案路徑，由 Gemini 檢查架構與邊界漏洞 |
+| `webchat_ask` | 深度思考諮詢 | 向 Gemini 2.5 Pro / Flash Thinking 提問獲取思考過程 |
+| `webchat_multimodal_inspect` | 多模態圖片檢閱 | 讀取本機 UI 截圖或架構圖進行視覺分析與排錯 |
+| `webchat_web_search` | Google 即時聯網搜尋 | 結合 Google Search Grounding 檢索即時文件與 API |
+| `webchat_ask` | 相容性舊版查詢接口 | 向 Gemini Web 提問取得回覆與思考過程 |
+| `get_webchat_status` | 服務狀態檢查 | 取得後端與直連引擎健康度 |
+| `webchat_models` | 模型清單 | 列出所有可用模型與上下文資訊 |
 | `mcp_read_file` / `mcp_write_file` / `mcp_edit_file` | 工作區檔案操作 | 讀取、寫入與局部修改本地檔案 |
 | `mcp_list_dir` / `mcp_grep_search` / `mcp_find_files` | 工作區檔案搜尋 | 遞迴目錄樹、全文檢索與檔名搜尋 |
 | `mcp_run_command` | PowerShell 指令執行 | 安全執行本機指令與測試 |
