@@ -214,10 +214,10 @@ def main():
     # 3. Create Tray menu
     menu = pystray.Menu(
         pystray.MenuItem("開啟儀表板 (Dashboard)", open_dashboard, default=True),
+        pystray.MenuItem("重啟服務 (Restart)", restart_server),
         pystray.MenuItem("Antigravity 一鍵設定", run_antigravity_setup),
         pystray.MenuItem("複製 API 端點 (Base URL)", copy_api_endpoint),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("重新啟動伺服器 (Restart)", restart_server),
         pystray.MenuItem(
             "自動重啟 (Auto-restart)",
             toggle_auto_restart,

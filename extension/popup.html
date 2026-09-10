@@ -1,169 +1,129 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
   <style>
-    body {
-      width: 320px;
-      margin: 0;
-      padding: 16px;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: #09090b;
-      color: #f4f4f5;
+    /* 與 http://127.0.0.1:8765/ 儀表板共用 token：淺色 Zinc */
+    :root{
+      --bg:#f4f4f5;--panel:#ffffff;--panel-2:#fafafa;--line:#e4e4e7;--line-soft:#ececee;
+      --ink:#18181b;--muted:#71717a;--faint:#a1a1aa;
+      --accent:#2563eb;--accent-dark:#1d4fd8;--ok:#16a34a;--err:#dc2626;
+      --sans:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC",sans-serif;
+      --mono:ui-monospace,Consolas,"Liberation Mono",monospace;
     }
-    .header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 12px;
-      border-bottom: 1px solid #27272a;
-      padding-bottom: 8px;
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{
+      width:340px;margin:0;padding:14px;
+      font:13px/1.6 var(--sans);color:var(--ink);background:var(--bg);
     }
-    .logo {
-      width: 22px;
-      height: 22px;
-      background: #2563eb;
-      color: #fff;
-      border-radius: 4px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      font-weight: bold;
+    /* 頁首：與儀表板 brand 對齊 */
+    .brand{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+    .mark{
+      width:32px;height:32px;flex:none;border:1px solid var(--line);border-radius:10px;
+      display:flex;align-items:center;justify-content:center;background:var(--panel);color:var(--accent);
     }
-    .title {
-      font-size: 13px;
-      font-weight: 600;
+    .brand h1{font-size:14px;font-weight:650;display:flex;align-items:center;gap:6px}
+    .brand .sub{font-size:12px;color:var(--muted)}
+    .ver{font:11px var(--mono);font-weight:500;color:var(--muted);background:var(--panel-2);
+      border:1px solid var(--line);border-radius:999px;padding:0 7px;line-height:18px;white-space:nowrap}
+    /* 通用面板 */
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+    .panel:last-child{margin-bottom:0}
+    .panel h2{font-size:13px;font-weight:650;margin-bottom:8px}
+    .hint{font-size:12px;color:var(--muted)}
+    .mono{font-family:var(--mono)}
+    /* 狀態列 */
+    .stat{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+      border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;background:var(--panel-2);margin-bottom:6px}
+    .stat:last-child{margin-bottom:0}
+    .stat .label{font-size:12px;color:var(--muted);white-space:nowrap;flex:none}
+    .stat .value{font:12px var(--mono);text-align:right;word-break:break-all}
+    .row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+    .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+    .dot.ok{background:var(--ok)}
+    .dot.bad{background:var(--err)}
+    .row strong{color:var(--ink);font-weight:600}
+    .row a{color:var(--accent);text-decoration:none}
+    /* 偏好設定 */
+    .setting-item{display:flex;align-items:flex-start;gap:8px;font-size:12px;cursor:pointer;
+      border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;background:var(--panel-2);margin-bottom:6px}
+    .setting-item:last-child{margin-bottom:0}
+    .setting-item input[type="checkbox"]{margin-top:3px;cursor:pointer;accent-color:var(--accent)}
+    .setting-desc{color:var(--muted);font-size:12px;margin-top:1px}
+    /* 傳輸模式三段選擇 */
+    .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:6px}
+    .seg button{flex:1;border:0;background:var(--panel-2);padding:7px 4px;font-size:12px;cursor:pointer;color:var(--muted)}
+    .seg button+button{border-left:1px solid var(--line-soft)}
+    .seg button.active{background:var(--accent);color:#fff;font-weight:600}
+    /* 按鈕：與儀表板 .btn 一致 */
+    .btn{
+      display:block;width:100%;border:1px solid var(--line);background:var(--panel-2);color:var(--ink);
+      border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;text-align:center;text-decoration:none;
+      box-sizing:border-box;margin-bottom:6px;
     }
-    .status-box {
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
-      padding: 10px;
-      font-size: 11px;
-      margin-bottom: 12px;
-    }
-    .settings-group {
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 8px;
-      padding: 10px;
-      margin-bottom: 12px;
-    }
-    .settings-title {
-      font-size: 11px;
-      font-weight: 600;
-      color: #38bdf8;
-      margin-bottom: 8px;
-    }
-    .setting-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      margin-bottom: 8px;
-      font-size: 11px;
-      color: #e4e4e7;
-      cursor: pointer;
-    }
-    .setting-item:last-child {
-      margin-bottom: 0;
-    }
-    .setting-item input[type="checkbox"] {
-      margin-top: 2px;
-      cursor: pointer;
-    }
-    .setting-desc {
-      color: #a1a1aa;
-      font-size: 10px;
-      line-height: 1.3;
-      margin-top: 1px;
-    }
-    .btn {
-      display: block;
-      width: 100%;
-      background: #2563eb;
-      color: #fff;
-      text-align: center;
-      padding: 7px 0;
-      border-radius: 6px;
-      font-size: 11px;
-      font-weight: 500;
-      text-decoration: none;
-      box-sizing: border-box;
-      border: none;
-      cursor: pointer;
-      margin-bottom: 6px;
-    }
-    .btn:hover {
-      background: #1d4ed8;
-    }
-    .btn.secondary {
-      background: #27272a;
-      color: #d4d4d8;
-    }
-    .btn.secondary:hover {
-      background: #3f3f46;
-    }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .msg {
-      font-size: 11px;
-      margin-top: 6px;
-      min-height: 14px;
-      color: #a1a1aa;
-    }
-    .msg.ok { color: #4ade80; }
-    .msg.err { color: #f87171; }
+    .btn:last-of-type{margin-bottom:0}
+    .btn:hover{background:#f1f1f3;border-color:#d4d4d8}
+    .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+    .btn.primary:hover{background:var(--accent-dark)}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .msg{font-size:12px;color:var(--muted);margin-top:8px;min-height:16px}
+    .msg.ok{color:var(--ok)}
+    .msg.err{color:var(--err)}
+    .msg code{font-family:var(--mono);font-size:12px}
   </style>
 </head>
 <body>
-  <div class="header">
-    <div class="logo">W</div>
-    <div class="title">WebChat to Local Bridge</div>
+  <div class="brand">
+    <div class="mark" aria-hidden="true">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="8"/></svg>
+    </div>
+    <div>
+      <h1>WebChat2Local <span class="ver" id="ext-version">v…</span></h1>
+      <div class="sub">Gemini / ChatGPT Web → 本機橋接</div>
+    </div>
   </div>
 
-  <div class="status-box">
-    <div>伺服器端點: <strong>127.0.0.1:8765/v1</strong></div>
-    <div id="tab-status" style="margin-top: 6px; color: #a1a1aa;">偵測當前分頁中...</div>
-  </div>
+  <section class="panel">
+    <h2>連線狀態</h2>
+    <div class="stat"><span class="label">伺服器端點</span><span class="value">127.0.0.1:8765/v1</span></div>
+    <div class="row" style="margin-top:8px"><span class="dot" id="tab-dot"></span><span id="tab-status">正在偵測當前分頁…</span></div>
+  </section>
 
-  <!-- Settings Group -->
-  <div class="settings-group">
-    <div class="settings-title">⚙️ 未登入模式與對話隔離偏好</div>
-    
+  <section class="panel">
+    <h2>傳輸模式</h2>
+    <div class="seg" id="transport-seg">
+      <button type="button" data-mode="auto">自動</button>
+      <button type="button" data-mode="direct">直連</button>
+      <button type="button" data-mode="extension">Web 視窗</button>
+    </div>
+    <div id="transport-hint" class="hint">讀取中…</div>
+  </section>
+
+  <section class="panel">
+    <h2>會話設定</h2>
     <label class="setting-item">
-      <input type="checkbox" id="setting-auto-reload">
+      <input type="checkbox" id="setting-clean-session">
       <div>
-        <div><strong>回合後自動重載刷新 (Auto Reload)</strong></div>
-        <div class="setting-desc">拿到回傳後自動刷新/跳轉頁面，徹底清空 DOM 與對話歷史，杜絕痕跡殘留。</div>
+        <div><strong>每輪使用乾淨會話</strong></div>
+        <div class="setting-desc">送出前開新對話；ChatGPT 訪客模式另在回合後重載，避免舊紀錄污染下一輪。</div>
       </div>
     </label>
-
-    <label class="setting-item">
-      <input type="checkbox" id="setting-force-new-chat">
-      <div>
-        <div><strong>回合前點擊新對話 (Force New Chat)</strong></div>
-        <div class="setting-desc">收到請求前主動點擊新對話按鈕，確保每輪由空白會話起始。</div>
-      </div>
-    </label>
-
     <label class="setting-item">
       <input type="checkbox" id="setting-auto-dismiss">
       <div>
-        <div><strong>自動關閉未登入登入提示 (Auto Dismiss)</strong></div>
-        <div class="setting-desc">在未登入訪客模式下，自動點擊「保持登出 (Stay logged out)」或關閉彈窗。</div>
+        <div><strong>自動關閉登入提示</strong></div>
+        <div class="setting-desc">訪客模式下自動關閉登入彈窗，不中斷傳送流程。</div>
       </div>
     </label>
-  </div>
+  </section>
 
-  <!-- Actions -->
-  <button id="btn-capture" class="btn">⚡ 一鍵抓取 Gemini Cookie (免開瀏覽器)</button>
-  <button id="btn-copy-cookie" class="btn secondary">📋 複製 Cookie JSON 到剪貼簿</button>
-  <button id="btn-copy-config" class="btn" style="background: #059669;">📋 複製 IDE 配置 (OpenAI 格式)</button>
-  <a href="http://127.0.0.1:8765" target="_blank" class="btn secondary" style="font-size: 11px; padding: 6px 0;">開啟本地控制面板 (8765)</a>
-  <div id="msg" class="msg"></div>
+  <section class="panel">
+    <h2>快速操作</h2>
+    <button id="btn-capture" class="btn primary">同步 Cookie（自動複製備用）</button>
+    <button id="btn-copy-config" class="btn">複製 IDE 配置</button>
+    <a href="http://127.0.0.1:8765" target="_blank" class="btn" style="margin-top:6px">開啟本地控制面板</a>
+    <div id="msg" class="msg"></div>
+  </section>
 
   <script src="popup.js"></script>
 </body>
