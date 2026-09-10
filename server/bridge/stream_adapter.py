@@ -42,11 +42,164 @@ def _is_canned_error_or_refusal(text: str) -> bool:
     return any(c in t for c in canned)
 
 
+_CONDUIT_RE = re.compile(r"\{[^{}]*\"conduit_(?:token|uuid)\"[^{}]*\}", re.IGNORECASE | re.DOTALL)
+
+
+def _contains_conduit(s: str) -> bool:
+    t = s or ""
+    return '"conduit_token"' in t or '"conduit_uuid"' in t
+
+
+def _sanitize_turn_text(s: str) -> str:
+    """Strip ChatGPT conduit handshake plumbing so it never reaches the client.
+
+    The conduit JSON ({"conduit_token":"eyJ..."}) is transport plumbing, never
+    the assistant answer. It must be filtered at chunk-arrival time, not just
+    at the end of the stream, otherwise the already-emitted deltas leak it to
+    the dashboard / API client.
+    """
+    if not s:
+        return s
+    if not _contains_conduit(s):
+        return s
+    cleaned = _CONDUIT_RE.sub("", s)
+    if _contains_conduit(cleaned):
+        # Split-across-chunks fragment (e.g. '{"conduit_' + 'token":...}')
+        # or otherwise unparseable plumbing: drop the whole chunk.
+        return ""
+    return cleaned
+
+
+def _merge_text(full: str, inc: str) -> str:
+    """Overlap-aware append of an incoming text fragment onto the accumulator.
+
+    Browser turns arrive from two independent sources (network interceptor and
+    DOM polling, sometimes two endpoints) with different baselines. A naive
+    ``full + delta`` duplicates content whenever the same prefix is delivered
+    twice (e.g. greeting ``"你好！😊"`` first, then the full answer
+    ``"你好！😊 很高兴..."``). Always returns a string that starts with
+    ``full`` so callers can diff ``merged[len(full):]`` for the delta to emit.
+    """
+    if not inc:
+        return full
+    if not full:
+        return inc
+    # The incoming fragment re-sends (part of) what we already have, glued
+    # with separators or a continuation char, e.g. full="祝你有美好的一",
+    # inc="\n\n       天         祝你有美好的一天". Split into the genuinely
+    # new head (cont) and the re-send; keep cont, extend only past full.
+    s_core = inc.strip()
+    if len(full) >= 2 and s_core and full in s_core:
+        idx = s_core.find(full)
+        cont = s_core[:idx].strip()
+        resend = s_core[idx:]
+        if resend == full:
+            return full + cont if cont else full
+        if resend.startswith(full):
+            ext = resend[len(full):]
+            if not cont:
+                return resend
+            if not ext or ext in cont:
+                return full + cont
+            if cont in ext:
+                return full + ext
+            return full + cont + ext
+    if full.endswith(inc):
+        return full
+    if inc.startswith(full):
+        return inc
+    # A second copy often carries HTML indentation leading whitespace
+    # ("         祝你有美好一天"). Compare the stripped core too; only the
+    # whitespace difference is then dropped, real indentation is preserved
+    # by the fallthrough append below.
+    core = inc.lstrip()
+    if core and core != inc:
+        if len(core) >= 4 and full.endswith(core):
+            return full
+        if core.startswith(full):
+            return core
+        if len(core) >= 4 and core in full:
+            return full
+    # Multi-char fragment already contained -> already delivered, drop it.
+    # (Single chars are exempt: legit repeats like "哈哈哈" stream char by char.)
+    if len(inc) >= 4 and inc in full:
+        return full
+    # Maximal tail/head overlap (e.g. whitespace-normalized resends).
+    probe = core or inc
+    maxk = min(len(probe), len(full))
+    k = maxk
+    while k >= 4 and not full.endswith(probe[:k]):
+        k -= 1
+    if k >= 4:
+        return full + probe[k:]
+    return full + inc
+
+
+def _dedup_leading_repeat(text: str) -> str:
+    """Collapse an internally duplicated cumulative text.
+
+    The extension sometimes delivers a cumulative snapshot that already
+    contains an earlier fragment: ``"祝你有美好\\n\\n         祝你有美好一天"``.
+    A plain prefix check accepts it whole and the duplication survives.
+    If HEAD + blank line(s) + REST and REST (stripped, strictly longer)
+    starts with HEAD (or contains HEAD with len>=4), keep REST only.
+
+    ChatGPT 免費版 (unauth HTML partial) 的 rebuild 拼接有時只有單個
+    ``\\n`` (例如 ``"你好！\\n你好！很高兴..."``)，同樣視為重複拼接處理。
+    合法的兩段文字 (REST 與 HEAD 無前綴關係) 不受影響。
+    """
+    t = text or ""
+    for _ in range(2):
+        # 注意：中間只吃 [ \t\xa0]*，內容行的前導空白必須留在 group(2)，
+        # 否則「帶膠水的重發」會被誤判成乾淨重複。\xa0 來自 HTML &nbsp;
+        # 縮排，\r?\n 兼容 CRLF。
+        m = re.match(r"^(.+?)\r?\n[ \t\xa0]*\r?\n([\s\S]+)$", t, re.DOTALL)
+        if m:
+            head, rest = m.group(1).strip(), m.group(2)
+            rest_stripped = rest.strip()
+            if head and len(rest_stripped) >= len(head):
+                if rest_stripped == head and rest == rest_stripped:
+                    pass  # legit verbatim repeat without glue; preserve
+                elif rest_stripped.startswith(head) or (len(head) >= 4 and head in rest_stripped):
+                    t = rest.lstrip()
+                    continue
+                else:
+                    break
+            elif head:
+                break
+            else:
+                break
+        # 單換行拼接 (HTML rebuild 常見)：HEAD + \n + REST，
+        # 僅當 REST 明確以 HEAD 開頭且更長時才折疊，避免誤傷正常換行。
+        m1 = re.match(r"^(.+?)\r?\n[ \t\xa0]*([\s\S]+)$", t, re.DOTALL)
+        if not m1:
+            break
+        head, rest = m1.group(1).strip(), m1.group(2)
+        rest_stripped = rest.strip()
+        if not head or len(head) < 2 or len(rest_stripped) <= len(head):
+            break
+        if rest_stripped.startswith(head):
+            # 排除逐字重複的短句 (例如 "哈哈\n哈哈" 可能是刻意重複)：
+            # 只有 REST 明顯更長 (多出 >=2 字元) 才視為拼接殘留。
+            if len(rest_stripped) >= len(head) + 2:
+                t = rest.lstrip()
+            else:
+                break
+        else:
+            break
+    return t
+
+
 def _is_transport_noise(text: str) -> bool:
     """Reject opaque Google transport strings accidentally selected as answers."""
     s = (text or "").strip()
     if not s:
         return False
+
+    # ChatGPT "conduit" handshake JSON ({"conduit_token":"eyJ..."}) is transport
+    # plumbing, never the assistant answer. Drop it so the fallback message is used.
+    if _contains_conduit(s):
+        return True
 
     if re.fullmatch(r"^(?:https?:)?//\S+", s, re.IGNORECASE):
         return True
@@ -210,12 +363,23 @@ async def stream_openai_completions(
         # 2. Stream content. Once a tool-call marker appears, hold the tool
         # payload back; the host client must receive structured tool_calls
         # rather than XML rendered as assistant text.
-        incoming_delta = event.delta or ""
-        if event.text and len(event.text) >= len(full_text):
-            incoming_delta = event.text[len(full_text):]
-            full_text = event.text
-        elif incoming_delta:
-            full_text += incoming_delta
+        # Sanitize conduit plumbing FIRST so it never accumulates or streams.
+        # Merge overlap-aware: network + DOM deliver the same prefix twice.
+        _ev_delta = _dedup_leading_repeat(_sanitize_turn_text(event.delta or ""))
+        _ev_text = _dedup_leading_repeat(_sanitize_turn_text(event.text or ""))
+        prev_len = len(full_text)
+        if _ev_text:
+            if len(_ev_text) >= len(full_text):
+                full_text = _dedup_leading_repeat(_merge_text(full_text, _ev_text))
+            elif not (full_text.endswith(_ev_text)
+                      or (len(_ev_text) >= 4 and _ev_text in full_text)):
+                pass  # stale snapshot from another element; ignore
+            incoming_delta = full_text[prev_len:]
+        elif _ev_delta:
+            full_text = _dedup_leading_repeat(_merge_text(full_text, _ev_delta))
+            incoming_delta = full_text[prev_len:]
+        else:
+            incoming_delta = ""
 
         if not tool_mode:
             # Tool/XML tags can be split across browser stream chunks.  Once
@@ -250,6 +414,8 @@ async def stream_openai_completions(
             # converted to structured tool_calls below when possible.
             break
 
+    # 最終保險：DONE 承載的 cumulative 快照本身可能已帶重複拼接。
+    full_text = _dedup_leading_repeat(full_text)
     extracted_tools = SessionManager.extract_tool_calls(full_text, available_tool_names)
 
     if not extracted_tools and _is_transport_noise(full_text):
@@ -382,13 +548,25 @@ async def stream_responses_api(
             last_thought = event.thought
             yield f"event: response.reasoning.delta\ndata: {json.dumps({'response_id': resp_id, 'item_id': item_id, 'delta': diff})}\n\n"
 
-        # Text delta
-        if event.delta:
-            yield f"event: response.text.delta\ndata: {json.dumps({'response_id': resp_id, 'item_id': item_id, 'delta': event.delta})}\n\n"
-        elif event.text and len(event.text) > len(last_text):
-            diff = event.text[len(last_text):]
-            last_text = event.text
-            yield f"event: response.text.delta\ndata: {json.dumps({'response_id': resp_id, 'item_id': item_id, 'delta': diff})}\n\n"
+        # Text delta (conduit plumbing stripped first, overlap-merged)
+        _ev_delta = _dedup_leading_repeat(_sanitize_turn_text(event.delta or ""))
+        _ev_text = _dedup_leading_repeat(_sanitize_turn_text(event.text or ""))
+        if _ev_delta and not _ev_text:
+            prev = last_text
+            last_text = _dedup_leading_repeat(_merge_text(last_text, _ev_delta))
+            diff = last_text[len(prev):]
+            if diff:
+                yield f"event: response.text.delta\ndata: {json.dumps({'response_id': resp_id, 'item_id': item_id, 'delta': diff})}\n\n"
+        elif _ev_text:
+            if len(_ev_text) >= len(last_text):
+                prev = last_text
+                last_text = _dedup_leading_repeat(_merge_text(last_text, _ev_text))
+                diff = last_text[len(prev):]
+                if diff:
+                    yield f"event: response.text.delta\ndata: {json.dumps({'response_id': resp_id, 'item_id': item_id, 'delta': diff})}\n\n"
+            elif not (last_text.endswith(_ev_text)
+                      or (len(_ev_text) >= 4 and _ev_text in last_text)):
+                pass  # stale snapshot from another element; ignore
 
         if event.type == "done":
             break
@@ -420,11 +598,16 @@ async def collect_complete_response(
         if event.type == "error":
             full_text += f"\n[Error: {event.error}]"
             break
-        if event.text:
-            if len(event.text) >= len(full_text):
-                full_text = event.text
-        elif event.delta:
-            full_text += event.delta
+        _ev_text = _dedup_leading_repeat(_sanitize_turn_text(event.text or ""))
+        _ev_delta = _dedup_leading_repeat(_sanitize_turn_text(event.delta or ""))
+        if _ev_text:
+            if len(_ev_text) >= len(full_text):
+                full_text = _dedup_leading_repeat(_merge_text(full_text, _ev_text))
+            elif not (full_text.endswith(_ev_text)
+                      or (len(_ev_text) >= 4 and _ev_text in full_text)):
+                pass  # stale snapshot from another element; ignore
+        elif _ev_delta:
+            full_text = _dedup_leading_repeat(_merge_text(full_text, _ev_delta))
         if event.thought:
             full_thought = event.thought
         elif event.thought_delta:
@@ -432,7 +615,8 @@ async def collect_complete_response(
         if event.type == "done":
             break
 
-    # Check for tool calls
+    # Check for tool calls (final dedup: DONE snapshot itself may carry the join)
+    full_text = _dedup_leading_repeat(full_text)
     extracted_tools = SessionManager.extract_tool_calls(full_text, available_tool_names)
 
 

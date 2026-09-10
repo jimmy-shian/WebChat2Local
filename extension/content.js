@@ -8,9 +8,31 @@ let reconnectTimer = null;
 let activeTurnId = null;
 let isGeneratingResponse = false;
 let rawForwarded = false;
+let netAccumulated = "";
 let lastApiTurnTimestamp = 0;
+// True once the page was observed generating for this turn. When set, a
+// later extraction failure must NOT be retried: a second attempt would push
+// the total past the bridge's 180s timeout and the answer would be discarded.
+let turnGenerationObserved = false;
 const TURN_DEADLINE_MS = 120000;
 const pendingMcpCalls = new Map();
+
+// --- Transport noise detection / stripping (shared with backend _is_transport_noise) ---
+const CONDUIT_RE = /\{[^{}]*"conduit_(?:token|uuid)"[^{}]*\}/ig;
+function looksLikeTransportNoise(s) {
+  const t = String(s || "").trim();
+  if (!t) return false;
+  if (CONDUIT_RE.test(t)) return true;
+  if (/^(?:https?:)?\/\/\S+$/i.test(t)) return true;
+  if (/^[A-Za-z0-9_.-]{16,}$/.test(t)) return true;
+  if (/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+$/.test(t)) return true;
+  if (/根據您的\s*(?:IP|位置|過去活動)|Based on your (?:IP|location)/i.test(t)) return true;
+  return false;
+}
+// Strip conduit token JSON from text, returning only the real content.
+function stripConduitToken(s) {
+  return String(s || "").replace(CONDUIT_RE, "").trim();
+}
 
 const isChatGPT = window.location.hostname.includes("chatgpt.com");
 const isGemini = window.location.hostname.includes("gemini.google.com");
@@ -26,18 +48,103 @@ function getActiveExtractor() {
   return window.GeminiExtractor;
 }
 
+// 擴充套件重載後，舊分頁的 content script 會變成孤兒：chrome.storage
+// 的回調永遠不回來。這裡加雙保險：context 失效立刻用預設值，
+// 正常情況也只等 1.5 秒，絕不讓整輪 turn 卡死在這一行。
+function isContextValid() {
+  try {
+    return !!(typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id);
+  } catch (_) {
+    return false;
+  }
+}
+
 function getStoredSettings() {
-  return new Promise((resolve) => {
-    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
-      chrome.storage.local.get({
-        autoReload: isChatGPT, // Default true for ChatGPT guest mode
-        forceNewChat: true,
-        autoDismissModals: true
-      }, resolve);
-    } else {
-      resolve({ autoReload: isChatGPT, forceNewChat: true, autoDismissModals: true });
+  const fallback = { autoReload: isChatGPT, forceNewChat: false, autoDismissModals: true };
+  if (!isContextValid()) {
+    console.warn("[WebChat Bridge] Extension context invalidated (舊分頁＋擴充套件剛重載？). 使用預設值，請重載本分頁。");
+    return Promise.resolve({ ...fallback });
+  }
+  return Promise.race([
+    new Promise((resolve) => {
+      try {
+        if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+          chrome.storage.local.get({
+            cleanSession: null, // 新版 popup 單一開關（同時寫入舊 key 以相容）
+            autoReload: isChatGPT, // Default true for ChatGPT guest mode
+            forceNewChat: true,
+            autoDismissModals: true
+          }, (res) => {
+            // 新版優先：cleanSession 同時代表「回合前開新對話＋回合後重載」
+            if (res && (res.cleanSession === true || res.cleanSession === false)) {
+              resolve({
+                autoReload: !!res.cleanSession,
+                forceNewChat: !!res.cleanSession,
+                autoDismissModals: res.autoDismissModals !== false,
+              });
+              return;
+            }
+            resolve(res);
+          });
+        } else {
+          resolve({ autoReload: isChatGPT, forceNewChat: true, autoDismissModals: true });
+        }
+      } catch (_) {
+        resolve({ autoReload: isChatGPT, forceNewChat: true, autoDismissModals: true });
+      }
+    }),
+    sleep(1500).then(() => fallback),
+  ]);
+}
+
+// ---------- Pending-turn persistence (survive MPA reload mid-turn) ----------
+const PENDING_KEY = "w2l_pending_turn";
+function _pendingStore() {
+  try {
+    if (typeof chrome !== "undefined" && chrome.storage) {
+      return chrome.storage.session || chrome.storage.local || null;
     }
+  } catch (_) {}
+  return null;
+}
+function savePendingTurn(t) {
+  try { const s = _pendingStore(); if (s) s.set({ [PENDING_KEY]: t }); } catch (_) {}
+}
+function clearPendingTurn() {
+  try { const s = _pendingStore(); if (s) s.remove(PENDING_KEY); } catch (_) {}
+}
+function loadPendingTurn() {
+  return new Promise((resolve) => {
+    try {
+      const s = _pendingStore();
+      if (!s) return resolve(null);
+      s.get( [PENDING_KEY], (r) => {
+        try { resolve((r && r[PENDING_KEY]) || null); }
+        catch (_) { resolve(null); }
+      });
+    } catch (_) { resolve(null); }
   });
+}
+function waitForWsOpen(maxMs) {
+  return new Promise((resolve) => {
+    const t0 = Date.now();
+    (function poll() {
+      try {
+        if (ws && ws.readyState === WebSocket.OPEN) return resolve(true);
+      } catch (_) {}
+      if (Date.now() - t0 > (maxMs || 10000)) return resolve(false);
+      setTimeout(poll, 200);
+    })();
+  });
+}
+function armInterceptor(turnId) {
+  try {
+    window.postMessage({
+      source: "webchat2local-content",
+      type: "W2L_SET_ACTIVE_REQUEST",
+      request_id: turnId,
+    }, "*");
+  } catch (_) {}
 }
 
 function callLocalMcpTool(toolName, args) {
@@ -80,14 +187,29 @@ window.addEventListener("message", (event) => {
     return;
   }
 
+  // 抓取證據直通 bridge /v1/logs（回答「GPT 網頁到底回什麼」）。
+  if (msg.type === "debug") {
+    console.log(`[WebChat Bridge][CAPTURE] ${(msg.scope || "")} ${(msg.text || "").slice(0, 220)}`);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({ type: "debug", scope: msg.scope || "capture", text: msg.text || "" }));
+      } catch (_) {}
+    }
+    return;
+  }
+
   if (msg.type === "chunk" && typeof msg.accumulated === "string" && msg.accumulated.length > 0) {
+    const stripped = stripConduitToken(msg.accumulated);
+    if (!stripped) return;
     const delta = typeof msg.delta === "string" ? msg.delta : "";
-    rawForwarded = true;
+    netAccumulated = stripped;
+    console.log(`[WebChat Bridge][NET-CHUNK] delta=${delta.length} total=${stripped.length} rawFwd=${rawForwarded}`);
     if (delta.length > 0 && ws && ws.readyState === WebSocket.OPEN) {
+      rawForwarded = true;
       ws.send(JSON.stringify({
         type: "chunk",
         turn_id: activeTurnId,
-        text: msg.accumulated,
+        text: stripped,
         delta,
         thought: "",
         thought_delta: "",
@@ -104,18 +226,19 @@ window.addEventListener("message", (event) => {
   }
 
   if (msg.type === "done") {
-    if (typeof msg.full_text === "string" && msg.full_text.trim().length > 0) {
-      rawForwarded = true;
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: "done",
-          turn_id: activeTurnId,
-          text: msg.full_text,
-          thought: "",
-        }));
-      }
-      isGeneratingResponse = false;
+    const stripped = stripConduitToken(msg.full_text);
+    console.log(`[WebChat Bridge][NET-DONE] raw_len=${(msg.full_text||"").length} stripped_len=${stripped.length}`);
+    if (!stripped) return;
+    rawForwarded = true;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "done",
+        turn_id: activeTurnId,
+        text: stripped,
+        thought: "",
+      }));
     }
+    isGeneratingResponse = false;
   }
 });
 
@@ -123,7 +246,27 @@ function init() {
   if (window.GeminiStatusHUD) {
     window.GeminiStatusHUD.init();
   }
+  if (!isContextValid()) {
+    console.error("[WebChat Bridge] 此分頁的擴充套件腳本已失效（擴充套件重載過）。請按 F5 重載本分頁，否則訊息送得出去但永遠收不到回傳。");
+  }
   connectWebSocket();
+
+  // Adopt a turn orphaned by a mid-turn reload (see savePendingTurn).
+  (async () => {
+    try {
+      const p = await loadPendingTurn();
+      if (!p || !p.turnId) return;
+      if (Date.now() - (p.t || 0) > 150000) { clearPendingTurn(); return; }
+      if (activeTurnId || isGeneratingResponse) { clearPendingTurn(); return; }
+      const ok = await waitForWsOpen(10000);
+      if (!ok) { clearPendingTurn(); return; }
+      resumeTurnFlow(p.turnId, p.prompt || "", p.model || "").catch(() => {
+        isGeneratingResponse = false;
+        activeTurnId = null;
+        clearPendingTurn();
+      });
+    } catch (_) {}
+  })();
 
   // Watch for in-page chat completions to execute in-page MCP Tunnel (Gemini only)
   if (isGemini) {
@@ -176,11 +319,28 @@ function connectWebSocket() {
     };
 
     ws.onmessage = async (event) => {
+      let msg = null;
       try {
-        const msg = JSON.parse(event.data);
-        handleIncomingMessage(msg);
+        msg = JSON.parse(event.data);
       } catch (err) {
         console.error("[WebChat Bridge] Error parsing WS message:", err);
+        return;
+      }
+      try {
+        await handleIncomingMessage(msg);
+      } catch (err) {
+        // Never let an unexpected error die silently: report it back to the
+        // bridge so the waiting turn fails fast with a visible reason.
+        console.error("[WebChat Bridge] Unhandled error in message handler:", err);
+        if (msg && msg.turn_id && ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({
+              type: "error",
+              turn_id: msg.turn_id,
+              error: `擴充套件內部錯誤: ${err && err.message ? err.message : String(err)}`,
+            }));
+          } catch (_) {}
+        }
       }
     };
 
@@ -291,17 +451,12 @@ async function handleIncomingMessage(msg) {
 
     activeTurnId = turnId;
     rawForwarded = false;
+    netAccumulated = "";
 
-    // Arm MAIN-world interceptor if on Gemini
-    if (isGemini) {
-      try {
-        window.postMessage({
-          source: "webchat2local-content",
-          type: "W2L_SET_ACTIVE_REQUEST",
-          request_id: turnId,
-        }, "*");
-      } catch (_) {}
-    }
+    // Arm MAIN-world interceptor (Gemini batchexecute / ChatGPT conversation stream)
+    armInterceptor(turnId);
+    // Persist so a mid-turn MPA reload can resume instead of hanging the bridge.
+    savePendingTurn({ turnId, prompt: promptText, model, submitted: false, t: Date.now() });
 
     lastApiTurnTimestamp = Date.now();
     const isNewSession = msg.is_new_session !== false;
@@ -311,10 +466,13 @@ async function handleIncomingMessage(msg) {
 
     const settings = await getStoredSettings();
 
-    // Execution with single-retry on failure
+    // Execution with single-retry on failure (retry only when the prompt
+    // never got the page generating; once generation was observed a retry
+    // would exceed the bridge timeout and the late answer gets discarded).
     let attempt = 0;
     let turnSuccess = false;
     let lastError = null;
+    turnGenerationObserved = false;
 
     while (attempt < 2 && !turnSuccess) {
       attempt++;
@@ -346,6 +504,7 @@ async function handleIncomingMessage(msg) {
 
         // Step F: Inject prompt and click send
         await controller.submitPromptWithRetry(promptText);
+        savePendingTurn({ turnId, prompt: promptText, model, submitted: true, t: Date.now() });
 
         // Step G: Stream response
         await streamResponseTurn(turnId, promptText, controller, extractor);
@@ -354,6 +513,10 @@ async function handleIncomingMessage(msg) {
       } catch (err) {
         lastError = err;
         console.warn(`[WebChat Bridge] Attempt ${attempt} failed:`, err);
+        if (turnGenerationObserved) {
+          console.warn("[WebChat Bridge] Generation was observed; skipping retry to stay within bridge timeout.");
+          break;
+        }
         if (attempt === 1) {
           console.log("[WebChat Bridge] Attempting auto-retry once after 1s debounce...");
           await sleep(1000);
@@ -361,15 +524,16 @@ async function handleIncomingMessage(msg) {
       }
     }
 
-    // After turns finish
-    try {
-      if (isGemini) {
+    // After turns finish - delay clearing active request to ensure stream capture completes
+    setTimeout(() => {
+      try {
         window.postMessage({ source: "webchat2local-content", type: "W2L_CLEAR_ACTIVE_REQUEST" }, "*");
-      }
-    } catch (_) {}
-    isGeneratingResponse = false;
-    activeTurnId = null;
+      } catch (_) {}
+      isGeneratingResponse = false;
+      activeTurnId = null;
+    }, 500);
 
+    clearPendingTurn();
     if (!turnSuccess) {
       console.error("[WebChat Bridge] Turn execution failed after retry:", lastError);
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -393,6 +557,49 @@ async function handleIncomingMessage(msg) {
         }, 600);
       }
     }
+  }
+}
+
+// Resume a turn orphaned by a mid-turn page reload: the server may still be
+// waiting on it. Never resubmits (would duplicate the user message) and
+// never auto-reloads (would loop). Fresh DOM → snapshot now, then stream.
+async function resumeTurnFlow(turnId, promptText, model) {
+  const controller = getActiveController();
+  const extractor = getActiveExtractor();
+  if (!controller || !extractor) { clearPendingTurn(); return; }
+  if (isGeneratingResponse || activeTurnId) return;
+  console.log(`[WebChat Bridge] Resuming orphaned turn ${turnId} after reload.`);
+  activeTurnId = turnId;
+  rawForwarded = false;
+  netAccumulated = "";
+  turnGenerationObserved = false;
+  armInterceptor(turnId);
+  lastApiTurnTimestamp = Date.now();
+  if (window.GeminiStatusHUD) window.GeminiStatusHUD.setGenerating(turnId, model, "斷點續跑");
+  try {
+    // 注意：不要 snapshot。重載後的 DOM 若已有完整答案，snapshot 會把它
+    // 標成 prior 反而找不到；留空 prior，新est 的 assistant 元素即目標。
+    await streamResponseTurn(turnId, promptText, controller, extractor);
+    // streamResponseTurn sends done/chunk itself on success.
+  } catch (err) {
+    console.warn(`[WebChat Bridge] Resume turn ${turnId} failed:`, err);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify({
+          type: "error",
+          turn_id: turnId,
+          error: (err && err.message ? err.message : String(err)) + "（頁面曾重載，已嘗試續跑）",
+        }));
+      } catch (_) {}
+    }
+    if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
+  } finally {
+    clearPendingTurn();
+    try {
+      window.postMessage({ source: "webchat2local-content", type: "W2L_CLEAR_ACTIVE_REQUEST" }, "*");
+    } catch (_) {}
+    isGeneratingResponse = false;
+    activeTurnId = null;
   }
 }
 
@@ -428,8 +635,11 @@ async function streamResponseTurn(turnId, promptSnippet, controller, extractor) 
     targetEl = extractor.findCurrentTurnResponseElement();
     const generating = controller.isGenerating();
 
-    if (targetEl || generating) {
+    // The network interceptor may already be streaming the answer even before
+    // the DOM renders any assistant element (e.g. ChatGPT guest HTML stream).
+    if (targetEl || generating || rawForwarded) {
       turnStarted = true;
+      turnGenerationObserved = true;
       break;
     }
   }
@@ -448,19 +658,35 @@ async function streamResponseTurn(turnId, promptSnippet, controller, extractor) 
   }
 
   let idleRounds = 0;
-  const maxIdleRounds = isChatGPT ? 15 : 12; // 15 * 80ms = 1.2s stabilization debounce
+  const maxIdleRounds = isChatGPT ? 15 : 12;
 
-  // Phase 3: Pure DOM-centric streaming
+  // Phase 3: Streaming loop
+  // ChatGPT: network interceptor IS the primary source. DOM extraction uses
+  // GeminiMarkdownSerializer which mangles ChatGPT tables, and DOM snapshots
+  // get sent as full-text deltas causing duplication in the bridge. Once the
+  // network stream delivers any real content, STOP DOM polling entirely and
+  // wait for the network done event. Fall back to DOM only if the network
+  // interceptor never delivered anything (e.g. request blocked before stream).
   while (isGeneratingResponse) {
     if (Date.now() >= deadline) throw new Error(`回應逾時 (${TURN_DEADLINE_MS / 1000}s)`);
     await sleep(80);
 
+    // Network done already arrived → exit immediately.
     if (rawForwarded && !isGeneratingResponse) break;
+
+    // ChatGPT network-active mode: once we have ANY network content,
+    // skip all DOM extraction — the network data is clean and complete.
+    if (isChatGPT && (rawForwarded || netAccumulated.length > 0)) {
+      // Just wait for generation to finish; network path owns the output.
+      continue;
+    }
 
     if (!targetEl) {
       targetEl = extractor.findCurrentTurnResponseElement();
     }
     if (!targetEl) {
+      // On ChatGPT, if we have network data but no DOM element yet, that's fine.
+      if (isChatGPT && netAccumulated.length > 0) continue;
       continue;
     }
 
@@ -468,12 +694,27 @@ async function streamResponseTurn(turnId, promptSnippet, controller, extractor) 
     const currentCandidateText = state.text || "";
     const currentCandidateThought = state.thought || "";
 
-    const deltaText = currentCandidateText.slice(lastText.length);
-    const deltaThought = currentCandidateThought.slice(lastThought.length);
+    // Gemini: replacement semantics for DOM snapshots (tables reflow mid-stream).
+    let deltaText = "", deltaThought = "";
+    if (currentCandidateText.startsWith(lastText)) {
+      deltaText = currentCandidateText.slice(lastText.length);
+    } else if (currentCandidateText.length > 0 && currentCandidateText !== lastText) {
+      deltaText = currentCandidateText;
+    }
+    if (currentCandidateThought.startsWith(lastThought)) {
+      deltaThought = currentCandidateThought.slice(lastThought.length);
+    } else if (currentCandidateThought.length > 0 && currentCandidateThought !== lastThought) {
+      deltaThought = currentCandidateThought;
+    }
 
     if (deltaText.length > 0 || deltaThought.length > 0) {
       idleRounds = 0;
-      if (!rawForwarded && ws && ws.readyState === WebSocket.OPEN) {
+      // NEVER send DOM-sourced chunks for ChatGPT — the network interceptor
+      // handles it. DOM is only used for Gemini where it's the primary source.
+      // Also block if netAccumulated has content (network path is active but
+      // rawForwarded flag hasn't flipped yet — race window).
+      const netActive = isChatGPT && (rawForwarded || netAccumulated.length > 0);
+      if (!netActive && !rawForwarded && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: "chunk",
           turn_id: turnId,
@@ -497,7 +738,28 @@ async function streamResponseTurn(turnId, promptSnippet, controller, extractor) 
     }
   }
 
-  if (rawForwarded) {
+  // ChatGPT: network interceptor done already sent its own done event.
+  // Just clean up and exit.
+  if (isChatGPT && (rawForwarded || netAccumulated.length > 0)) {
+    if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
+    return;
+  }
+
+  // Gemini (or ChatGPT fallback if network never delivered):
+  // Network-first final text selection.
+  const netClean = stripConduitToken(netAccumulated || "");
+  if (netClean.trim().length > 0 && netClean.trim().length >= lastText.trim().length) {
+    isGeneratingResponse = false;
+    activeTurnId = null;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "done",
+        turn_id: turnId,
+        text: netClean,
+        thought: "",
+      }));
+    }
+    console.log(`[WebChat Bridge] Turn ${turnId} completed via network capture (${netClean.length} chars).`);
     if (window.GeminiStatusHUD) window.GeminiStatusHUD.setConnected();
     return;
   }
@@ -506,7 +768,7 @@ async function streamResponseTurn(turnId, promptSnippet, controller, extractor) 
     throw new Error("生成完畢，但未能擷取到文字回應。");
   }
 
-  // Phase 4: Emit completion
+  // Phase 4: Emit completion (DOM fallback for Gemini)
   isGeneratingResponse = false;
   activeTurnId = null;
   if (ws && ws.readyState === WebSocket.OPEN) {

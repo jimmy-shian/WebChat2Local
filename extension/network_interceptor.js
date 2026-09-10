@@ -52,6 +52,10 @@
 
   function getProcessor(url) {
     let proc = processors.get(url);
+    if (proc && proc.isFinished && proc.isFinished()) {
+      processors.delete(url);
+      proc = null;
+    }
     if (!proc) {
       proc = createGeminiProcessor(activeRequestId || "req_" + Date.now(), url);
       processors.set(url, proc);
@@ -127,11 +131,24 @@
     function emitDone() {
       if (finished) return;
       finished = true;
-      // Always notify the content script, even when no answer candidate was
-      // found.  The previous conditional could leave the bridge waiting for
-      // the DOM path after a transport-only stream and made failures look like
-      // successful one-token responses.
+      // If the only captured text is transport noise (batchexecute plumbing,
+      // not the real Gemini answer), unlock the stream key so the next POST
+      // can be captured by a fresh processor.
+      if (extracted && looksLikeConduitToken(extracted)) {
+        postToContent({ type: "done", request_id: reqId, full_text: "" });
+        setTimeout(() => { if (lockedStreamKey === streamKeyVal) lockedStreamKey = null; }, 3000);
+        return;
+      }
       postToContent({ type: "done", request_id: reqId, full_text: extracted });
+    }
+
+    // Gemini batchexecute transport may return opaque JSON plumbing that is
+    // NOT the assistant answer (e.g. conduit tokens on newer builds).
+    function looksLikeConduitToken(s) {
+      const t = String(s || "").trim();
+      if (/\{[^{}]*"conduit_(?:token|uuid)"[^{}]*\}/i.test(t)) return true;
+      if (t.startsWith("{") && (t.includes('"conduit_token"') || t.includes('"conduit_uuid"'))) return true;
+      return false;
     }
 
     /**
@@ -252,7 +269,7 @@
       }
     }
 
-    return { feed, end: emitDone };
+    return { feed, end: emitDone, isFinished: () => finished };
   }
 
   window.fetch = async function (...args) {

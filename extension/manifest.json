@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WebChat to Local Bridge (Gemini & ChatGPT)",
-  "version": "2.1.0",
+  "version": "2.9.3",
   "description": "Bridge Google Gemini Web & ChatGPT Web chat and analysis tools to local development environments.",
   "permissions": ["activeTab", "storage", "cookies", "alarms", "downloads"],
   "host_permissions": [
@@ -21,6 +21,12 @@
     {
       "matches": ["https://gemini.google.com/*"],
       "js": ["network_interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://chatgpt.com/*", "https://*.chatgpt.com/*"],
+      "js": ["chatgpt_interceptor.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },

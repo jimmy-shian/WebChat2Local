@@ -193,16 +193,26 @@ const ChatGptController = {
       return true;
     }
 
-    // Secondary fallback: Enter key event on editor
+    // Secondary fallback: full Enter key sequence on editor
     if (editor) {
-      editor.dispatchEvent(new KeyboardEvent("keydown", {
-        key: "Enter",
-        code: "Enter",
-        keyCode: 13,
-        which: 13,
-        bubbles: true,
-        cancelable: true,
-      }));
+      for (const type of ["keydown", "keypress", "keyup"]) {
+        editor.dispatchEvent(new KeyboardEvent(type, {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true,
+        }));
+      }
+      try {
+        editor.dispatchEvent(new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "insertParagraph",
+          data: "\n",
+        }));
+      } catch (_) {}
       return true;
     }
     return false;
@@ -219,6 +229,38 @@ const ChatGptController = {
     }
 
     await new Promise(r => setTimeout(r, 250));
+    // 驗證 prompt 真的上頁：送出後 4 秒內頁面應出現使用者訊息。
+    // 若沒出現（選擇器過期 / React 沒吃到輸入），直接報錯而非讓後續
+    // 流程空等 12 秒最後只拿到 conduit 握手。
+    const needle = String(promptText || "").slice(0, 24);
+    let verified = false;
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      try {
+        const userEls = document.querySelectorAll(
+          "[data-message-author-role='user'], [data-testid*='user'], main article, main [data-message-id]"
+        );
+        for (const el of userEls) {
+          const t = (el.innerText || el.textContent || "");
+          if (needle && t.includes(needle)) { verified = true; break; }
+        }
+        if (verified) break;
+        // 送出後輸入框應被清空；若還留著原文，代表根本沒送出去。
+        const stillThere = editor && (editor.innerText || editor.textContent || editor.value || "").includes(needle);
+        if (!stillThere && i > 10) { verified = true; break; }
+      } catch (_) {}
+    }
+    try {
+      window.postMessage({
+        source: "webchat2local-network",
+        type: "debug",
+        scope: "chatgpt-submit",
+        text: "prompt_len=" + String(promptText || "").length + " verified=" + verified,
+      }, "*");
+    } catch (_) {}
+    if (!verified) {
+      throw new Error("已點擊傳送，但頁面 4 秒內未出現使用者訊息（輸入框選擇器可能過期）。請在 chatgpt.com 手動送一次確認頁面正常。");
+    }
     return editor;
   },
 
@@ -246,15 +288,17 @@ const ChatGptController = {
   },
 
   startNewChatIfAvailable: function () {
+    // IMPORTANT: Never click anchor links (e.g. a[href='/'], the logo) here.
+    // In guest mode chatgpt.com is a server-rendered MPA: clicking an anchor
+    // triggers a FULL page navigation mid-turn, which destroys the content
+    // script and the WebSocket connection, so the local bridge never receives
+    // any chunk/done/error events for the active turn (it hangs until timeout).
+    // Only real sidebar buttons are SPA-safe to click.
     const newChatSelectors = [
-      "a[href='/']",
-      "a[data-testid='create-new-chat-button']",
       "button[aria-label*='New chat']",
       "button[aria-label*='新對話']",
-      "button[aria-label*='新建对话']",
-      "a[aria-label*='New chat']"
+      "button[aria-label*='新建对话']"
     ];
-
     for (const sel of newChatSelectors) {
       const btn = document.querySelector(sel);
       if (btn && btn.offsetParent !== null) {
@@ -263,11 +307,13 @@ const ChatGptController = {
       }
     }
 
-    // Direct navigation if button not in DOM
-    if (window.location.pathname !== "/") {
-      window.location.href = "https://chatgpt.com/";
-      return true;
-    }
+    // IMPORTANT: Never fall back to window.location.href navigation here.
+    // A full page navigation mid-turn destroys the content script and the
+    // WebSocket connection, so the local bridge never receives any
+    // chunk/done/error events for the active turn (it hangs until timeout).
+    // Skipping is safe: the prompt can still be submitted in the current
+    // conversation.
+    console.warn("[ChatGpt Bridge] New-chat button not found; continuing in current conversation.");
     return false;
   },
 

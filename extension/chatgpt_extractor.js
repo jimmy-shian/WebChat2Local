@@ -45,7 +45,32 @@ const ChatGptExtractor = {
     const prose = Array.from(document.querySelectorAll("div.prose, [class*='prose']")).filter(
       (el) => !el.closest("[data-message-author-role='user']")
     );
-    return prose;
+    if (prose.length > 0) return prose;
+
+    // Broad fallback for redesigned DOM: any message-ish node that is NOT
+    // tagged as user AND (has assistant markers OR long text). Strict filter
+    // so user bubbles never leak in as "assistant".
+    try {
+      const broad = Array.from(
+        document.querySelectorAll("main [data-message-id], main article, main div.group")
+      ).filter((el) => {
+        if (!el || el.offsetParent === null) return false;
+        if (el.getAttribute("data-message-author-role") === "user") return false;
+        if (el.closest && el.closest("[data-message-author-role='user']")) return false;
+        const t = (el.innerText || el.textContent || "").trim();
+        if (t.length < 2) return false;
+        const hasMarker = !!(el.querySelector && el.querySelector(
+          ".markdown, [class*='markdown'], button[aria-label*='Copy'], button[aria-label*='複製'], [data-testid*='copy']"
+        ));
+        const role = el.getAttribute("data-message-author-role");
+        if (role === "assistant" || hasMarker) return true;
+        // No markers at all: only accept reasonably long text (real answer),
+        // never short opaque strings (conduit / ids).
+        return t.length > 20;
+      });
+      if (broad.length > 0) return broad;
+    } catch (_) {}
+    return [];
   },
 
   snapshotBeforeTurn: function (turnId) {
@@ -157,10 +182,27 @@ const ChatGptExtractor = {
     // Clean up trailing button artifacts (e.g. Copy, Share, 複製)
     mainMarkdown = mainMarkdown.replace(/\n*(?:Copy|Share|複製|分享|重新產生|Regenerate)\s*$/gi, "").trim();
 
+    // Reject transport noise: if the extracted text is only a conduit token
+    // or opaque hash, return empty so content.js polling tries the next element.
+    if (this._isTransportNoise(mainMarkdown)) {
+      return { text: "", thought: thoughtText };
+    }
+
     return {
       text: mainMarkdown,
       thought: thoughtText,
     };
+  },
+
+  _isTransportNoise: function (s) {
+    const t = String(s || "").trim();
+    if (!t) return false;
+    if (/\{[^{}]*"conduit_(?:token|uuid)"[^{}]*\}/i.test(t)) return true;
+    if (/^(?:https?:)?\/\/\S+$/i.test(t)) return true;
+    if (/^[A-Za-z0-9_.-]{16,}$/.test(t)) return true;
+    if (/^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+$/.test(t)) return true;
+    if (/根據您的\s*(?:IP|位置|過去活動)|Based on your (?:IP|location)/i.test(t)) return true;
+    return false;
   },
 };
 

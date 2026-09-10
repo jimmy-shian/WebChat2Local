@@ -551,3 +551,164 @@ def test_split_tool_marker_is_not_leaked_as_text():
     tool_chunks = [p for p in payloads if p["choices"][0]["delta"].get("tool_calls")]
     assert tool_chunks
     assert tool_chunks[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+def _collect_content(events):
+    async def collect():
+        return [line async for line in stream_openai_completions(events())]
+
+    lines = asyncio.run(collect())
+    payloads = [json.loads(x[6:]) for x in lines if x.startswith("data: {")]
+    return "".join(
+        p["choices"][0]["delta"].get("content", "")
+        for p in payloads
+    )
+
+
+def test_duplicate_prefix_from_two_sources_is_merged_once():
+    # Loose greeting snapshot first, then the full answer (network + DOM paths).
+    full = "你好！😊 很高兴见到你。有什么想聊的吗？"
+
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text="你好！😊", delta="你好！😊")
+            yield TurnEvent("delta", text=full, delta=full[5:])
+            yield TurnEvent("done", text=full)
+        return gen()
+
+    assert _collect_content(events) == full
+
+
+def test_stale_shorter_snapshot_is_ignored():
+    full = "這是完整答案的全部文字內容。"
+
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text=full, delta=full)
+            # Stale snapshot from another element (shorter, not covered).
+            yield TurnEvent("delta", text="注意", delta="注意")
+            yield TurnEvent("done", text=full)
+        return gen()
+
+    assert _collect_content(events) == full
+
+
+def test_indented_duplicate_is_merged_once():
+    # Second copy carries HTML indentation leading whitespace.
+    full = "祝你有美好一天"
+
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text=full, delta=full)
+            yield TurnEvent("delta", text="         " + full, delta="         " + full)
+            yield TurnEvent("done", text="         " + full)
+        return gen()
+
+    assert _collect_content(events) == full
+
+
+def test_internally_duplicated_cumulative_is_collapsed():
+    # Extension delivers a cumulative snapshot already containing the dup.
+    full = "祝你有美好\n\n         祝你有美好一天"
+
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text="祝你有美好", delta="祝你有美好")
+            yield TurnEvent("delta", text=full, delta=full[5:])
+            yield TurnEvent("done", text=full)
+        return gen()
+
+    assert _collect_content(events) == "祝你有美好一天"
+
+
+def test_resend_glued_with_continuation_is_merged():
+    # Second fragment = separators + next char + full re-send.
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text="祝你有美好的一", delta="祝你有美好的一")
+            yield TurnEvent("delta", text="\n\n       天         祝你有美好的一天",
+                            delta="\n\n       天         祝你有美好的一天")
+            yield TurnEvent("done", text="祝你有美好的一天")
+        return gen()
+
+    assert _collect_content(events) == "祝你有美好的一天"
+
+
+def test_indented_equal_repeat_is_collapsed():
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text="祝你有美好一天", delta="祝你有美好一天")
+            yield TurnEvent("delta", text="祝你有美好一天\n\n     祝你有美好一天",
+                            delta="\n\n     祝你有美好一天")
+            yield TurnEvent("done", text="祝你有美好一天\n\n     祝你有美好一天")
+        return gen()
+
+    assert _collect_content(events) == "祝你有美好一天"
+
+
+async def _collect_nonstream(events):
+    from server.bridge.stream_adapter import collect_complete_response
+    resp = await collect_complete_response(events())
+    return resp.choices[0].message.content
+
+
+def test_collect_path_dedups_joined_snapshot():
+    # Exact live shape: partial greeting, then joined partial+full.
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text="祝你有美好", delta="祝你有美好")
+            yield TurnEvent(
+                "delta",
+                text="祝你有美好\n\n         祝你有美好一天",
+                delta="\n\n         祝你有美好一天",
+            )
+            yield TurnEvent("done", text="祝你有美好\n\n         祝你有美好一天")
+        return gen()
+
+    assert asyncio.run(_collect_nonstream(events)) == "祝你有美好一天"
+
+
+def test_clean_verbatim_repeat_is_preserved():
+    text = "請複述：你好\n\n你好"
+
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text=text, delta=text)
+            yield TurnEvent("done", text=text)
+        return gen()
+
+    assert _collect_content(events) == text
+
+
+def test_legit_two_paragraphs_are_preserved():
+    text = "第一段是引言。\n\n第二段是完全不同的結論。"
+
+    def events():
+        async def gen():
+            yield TurnEvent("delta", text=text, delta=text)
+            yield TurnEvent("done", text=text)
+        return gen()
+
+    assert _collect_content(events) == text
+
+
+def test_legit_indented_code_is_preserved():
+    def events():
+        async def gen():
+            yield TurnEvent("delta", delta="def f():\n")
+            yield TurnEvent("delta", delta="    return 1")
+            yield TurnEvent("done", text="def f():\n    return 1")
+        return gen()
+
+    assert _collect_content(events) == "def f():\n    return 1"
+
+
+def test_legit_char_repeat_is_preserved():
+    def events():
+        async def gen():
+            yield TurnEvent("delta", delta="哈哈")
+            yield TurnEvent("delta", delta="哈")
+            yield TurnEvent("done", text="哈哈哈")
+        return gen()
+
+    assert _collect_content(events) == "哈哈哈"
