@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
-set PYTHONUTF8=1
-set PYTHONIOENCODING=utf-8
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_server.ps1"
+rem Launch the server with NO console window: pythonw runs desktop_app.py
+rem (system-tray app) in the background. Close it from the tray icon menu.
+wscript.exe "%~dp0start_server_hidden.vbs"

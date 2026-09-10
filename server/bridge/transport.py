@@ -61,12 +61,31 @@ def set_mode(mode: str) -> str:
 
 def transport_snapshot() -> dict:
     """Status snapshot for /v1/status and the dashboard."""
+    try:
+        platforms = hub.connected_platforms()
+    except Exception:
+        platforms = {}
     return {
         "mode": get_mode(),
         "valid_modes": list(VALID_MODES),
         "direct_configured": direct_is_configured(),
         "browser_connected": hub.is_connected,
+        "platforms": platforms,
+        "active_tabs": len(hub.active_connections),
     }
+
+
+# Generic route id: no platform implied by the name, so the dispatcher must
+# look at the actually connected tabs instead of guessing from the model.
+GENERIC_MODELS = ("webchat/auto", "webchat", "auto")
+
+
+def _connected_platforms() -> set:
+    """Set of normalized platforms with at least one connected tab."""
+    try:
+        return set(hub.connected_platforms().keys())
+    except Exception:
+        return set()
 
 
 class TransportUnavailable(Exception):
@@ -90,6 +109,26 @@ def resolve_turn(
     mode. Passes session_id, is_continuation, and files to stateful direct engine.
     """
     mode = get_mode()
+    is_chatgpt_req = "chatgpt" in (model or "").lower()
+    is_generic = (model or "").strip().lower() in GENERIC_MODELS
+
+    # ChatGPT 模型只能透過瀏覽器擴充套件（chatgpt.com 分頁）服務。
+    # 無論傳輸模式為何，都不允許落入 Gemini 直連，否則模型選擇會被忽略。
+    # 注意：用「各分頁平台普查」而非 browser_info（後者只是最後回報者，
+    # 雙開分頁時會翻轉，曾造成明明有 ChatGPT 分頁卻誤判）。
+    if is_chatgpt_req:
+        plats = _connected_platforms()
+        if hub.is_connected and ("chatgpt" in plats or "unknown" in plats):
+            return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session, platform="chatgpt"), "extension"
+        if hub.is_connected:
+            raise TransportUnavailable(
+                "已指定 ChatGPT 模型，但目前連線的分頁只有 Gemini。"
+                "請開啟 https://chatgpt.com 分頁後重試。"
+            )
+        raise TransportUnavailable(
+            "已指定 ChatGPT 模型，但瀏覽器擴充套件尚未連線。"
+            "請在 Chrome 或 Edge 開啟 https://chatgpt.com/ 頁面。"
+        )
 
     if mode == "direct":
         if not DIRECT_FALLBACK_ENABLED:
@@ -112,7 +151,10 @@ def resolve_turn(
 
     if mode == "extension":
         if hub.is_connected:
-            return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session), "extension"
+            # 通用模型：若只連了一種平台，直接指定，避免按模型名誤判分頁。
+            plats = _connected_platforms() - {"unknown"}
+            single = next(iter(plats)) if len(plats) == 1 else None
+            return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session, platform=single), "extension"
         if _direct_ok():
             # Graceful fallback to direct cookie when extension is chosen but not currently open
             return direct_stream_generate(
@@ -127,16 +169,13 @@ def resolve_turn(
             "請開啟 https://gemini.google.com 頁面。"
         )
 
-    # If model is explicitly ChatGPT or browser extension is connected to ChatGPT
-    is_chatgpt_req = "chatgpt" in model.lower() or (hub.is_connected and hub.browser_info.get("platform") == "chatgpt")
-    if is_chatgpt_req:
-        if hub.is_connected:
-            return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session), "extension"
-        raise TransportUnavailable(
-            "已指定 ChatGPT 模型，但瀏覽器擴充套件尚未連線。請在 Chrome 或 Edge 開啟 https://chatgpt.com/ 頁面。"
-        )
-
-    # auto mode: Direct-first when cookies configured, extension fallback
+    # auto mode: Direct-first when cookies configured, extension fallback.
+    # 例外：通用模型 (webchat/auto) 且「只」連了 ChatGPT 分頁時，強制走擴充套件。
+    # 否則只要 cookie 還在，auto 永遠走 Gemini 直連，開了 ChatGPT 分頁也沒用。
+    if is_generic and hub.is_connected:
+        plats = _connected_platforms() - {"unknown"}
+        if plats == {"chatgpt"}:
+            return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session, platform="chatgpt"), "extension"
     if _direct_ok():
         return direct_stream_generate(
             prompt=prompt,
@@ -146,9 +185,11 @@ def resolve_turn(
             files=files,
         ), "direct"
     if hub.is_connected:
-        return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session), "extension"
+        plats = _connected_platforms() - {"unknown"}
+        single = next(iter(plats)) if is_generic and len(plats) == 1 else None
+        return hub.execute_turn(prompt=prompt, model=model, is_new_session=is_new_session, platform=single), "extension"
 
     raise TransportUnavailable(
         "瀏覽器擴充套件未連線 (請開啟 https://chatgpt.com 或 https://gemini.google.com)，"
         "且沒有可用的 Gemini cookie 直連設定。"
-    )
+    )

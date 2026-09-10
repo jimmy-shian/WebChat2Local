@@ -394,7 +394,7 @@ async def websocket_endpoint(websocket: WebSocket):
             try:
                 import json
                 data = json.loads(raw_msg)
-                await hub.handle_incoming_message(data)
+                await hub.handle_incoming_message(data, websocket)
             except Exception as e:
                 hub.logs.log("ERROR", "WS", f"Error parsing incoming WS message: {e}")
     except WebSocketDisconnect:

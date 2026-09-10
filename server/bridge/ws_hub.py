@@ -104,6 +104,9 @@ class InMemoryLogBuffer:
 class BrowserWebSocketHub:
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
+        # Per-tab platform tracking ("gemini" / "chatgpt") so submit_prompt
+        # can be routed to the correct tab instead of blindly broadcast to all.
+        self.connection_platforms: Dict[Any, str] = {}
         self.browser_info: Dict[str, Any] = {
             "connected": False,
             "page_url": None,
@@ -120,10 +123,26 @@ class BrowserWebSocketHub:
     def is_connected(self) -> bool:
         return len(self.active_connections) > 0
 
+    def connected_platforms(self) -> Dict[str, int]:
+        """Per-tab platform census ({"chatgpt": n, "gemini": m, ...}).
+
+        browser_info only keeps the LAST reporter's platform, so with both a
+        Gemini tab and a ChatGPT tab open it flips back and forth. Routing and
+        the dashboard must use this per-tab view instead.
+        """
+        counts: Dict[str, int] = {}
+        for ws in list(self.active_connections):
+            p = str(self.connection_platforms.get(ws) or "unknown").lower()
+            if p not in ("gemini", "chatgpt"):
+                p = "unknown"
+            counts[p] = counts.get(p, 0) + 1
+        return counts
+
     def get_status(self) -> Dict[str, Any]:
         return {
             "browser_connected": self.is_connected,
             "active_tabs": len(self.active_connections),
+            "platforms": self.connected_platforms(),
             "browser_info": self.browser_info,
             "active_turn": self.active_turn_id,
             "has_active_turn": self.active_turn_id is not None,
@@ -133,6 +152,7 @@ class BrowserWebSocketHub:
     async def register_connection(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.add(websocket)
+        self.connection_platforms.setdefault(websocket, "unknown")
         self.browser_info["connected"] = True
         self.browser_info["last_seen"] = time.time()
         self.logs.log("INFO", "HUB", "Gemini Web extension connected via WebSocket.")
@@ -140,16 +160,45 @@ class BrowserWebSocketHub:
 
     def unregister_connection(self, websocket: WebSocket):
         self.active_connections.discard(websocket)
+        self.connection_platforms.pop(websocket, None)
         if not self.active_connections:
             self.browser_info["connected"] = False
             self.logs.log("WARN", "HUB", "Gemini Web extension disconnected (0 tabs active).")
+        else:
+            self.logs.log("WARN", "HUB", "Extension tab disconnected "
+                          f"({len(self.active_connections)} tabs remain).")
+        if self.active_turn_id:
+            self.logs.log("WARN", "TURN",
+                          f"Disconnect during active {self.active_turn_id} "
+                          f"({len(self.active_connections)} tabs remain).")
         LOGGER.info("🔴 [WS] 擴充套件中斷 (剩餘標籤頁數: %d)", len(self.active_connections))
 
-    async def broadcast(self, message: Dict[str, Any]):
-        """Broadcasts a JSON message to all connected extension tabs."""
+    def _platform_of(self, websocket: Any) -> str:
+        """Best-effort platform lookup for a connection (URL first, registry second)."""
+        url = ""
+        try:
+            url = str(getattr(websocket, "url", {}).path or "")
+        except Exception:
+            pass
+        # WebSocket URL doesn't carry the origin page; rely on the registry.
+        return self.connection_platforms.get(websocket) or "unknown"
+
+    async def broadcast(self, message: Dict[str, Any], platform: Optional[str] = None):
+        """Sends a JSON message to extension tabs.
+
+        When `platform` is given, only tabs whose registered platform matches
+        receive the message (falling back to all tabs if none matched). This
+        prevents cross-platform races when both a Gemini tab and a ChatGPT tab
+        are connected at the same time.
+        """
         payload = json.dumps(message, ensure_ascii=False)
+        targets = list(self.active_connections)
+        if platform:
+            matched = [ws for ws in targets if self.connection_platforms.get(ws) == platform]
+            if matched:
+                targets = matched
         dead = []
-        for ws in list(self.active_connections):
+        for ws in targets:
             try:
                 await ws.send_text(payload)
             except Exception:
@@ -157,7 +206,7 @@ class BrowserWebSocketHub:
         for d in dead:
             self.unregister_connection(d)
 
-    async def handle_incoming_message(self, data: Dict[str, Any]):
+    async def handle_incoming_message(self, data: Dict[str, Any], websocket: Any = None):
         """Routes incoming messages from the browser extension."""
         msg_type = data.get("type")
         turn_id = data.get("turn_id")
@@ -175,6 +224,9 @@ class BrowserWebSocketHub:
             plat = meta.get("platform")
             if not plat:
                 plat = "chatgpt" if "chatgpt" in url else "gemini"
+            # Remember which tab reported this platform so turns can be routed.
+            if websocket is not None:
+                self.connection_platforms[websocket] = plat
             self.browser_info.update({
                 "connected": True,
                 "page_url": url or None,
@@ -186,6 +238,15 @@ class BrowserWebSocketHub:
             return
 
         if msg_type == "pong":
+            return
+
+        if msg_type == "debug":
+            # 擴充套件回報的抓取證據（URL / content-type / 首字），直接進
+            # /v1/logs 與 webchat2local.local.log，回答「GPT 網頁到底回什麼」。
+            scope = str(data.get("scope", "capture") or "capture")[:24]
+            text = str(data.get("text", "") or "")[:300]
+            self.logs.log("DEBUG", "CAPTURE", f"[{scope}] {text}")
+            LOGGER.info("🔍 [CAPTURE %s] %s", scope, text[:280])
             return
 
         if msg_type == "call_mcp_tool":
@@ -203,6 +264,17 @@ class BrowserWebSocketHub:
             })
             LOGGER.info("✅ [TUNNEL MCP] 本地工具執行完成: %s | Status: %s", tool_name, res.get("status", "done"))
             return
+
+        # File-log every turn event received from the browser so failures are
+        # diagnosable from webchat2local.local.log (in-memory log is volatile).
+        if msg_type in ("chunk", "done", "error") and turn_id:
+            LOGGER.info(
+                "📥 [WS RX] %s | Turn: %s | text_len=%d | error=%s",
+                msg_type,
+                turn_id,
+                len(str(data.get("text", ""))),
+                str(data.get("error") or "-")[:160],
+            )
 
         # Handle active turn streaming events
         if turn_id and turn_id in self.turn_queues:
@@ -248,6 +320,7 @@ class BrowserWebSocketHub:
         model: str = "gemini-web/pro",
         timeout_sec: int = DEFAULT_BROWSER_TIMEOUT,
         is_new_session: bool = True,
+        platform: Optional[str] = None,
     ) -> AsyncGenerator[TurnEvent, None]:
         """
         Executes a prompt turn on Gemini Web and streams back incremental TurnEvents.
@@ -278,23 +351,37 @@ class BrowserWebSocketHub:
             LOGGER.info("🚀 [WS SEND] 發送至擴充套件 | Turn: %s (%s) | Model: %s | Prompt長度: %d", turn_id, session_tag, model, len(prompt))
 
             try:
-                # Send prompt and session status to extension
+                # Route the turn to the tab whose platform matches the model,
+                # so a concurrently open Gemini tab never races a ChatGPT turn.
+                # An explicit platform (e.g. resolved for the generic
+                # webchat/auto route) wins over the model-name heuristic.
+                if platform in ("chatgpt", "gemini"):
+                    target_platform = platform
+                else:
+                    target_platform = "chatgpt" if "chatgpt" in (model or "").lower() else "gemini"
                 await self.broadcast({
                     "type": "submit_prompt",
                     "turn_id": turn_id,
                     "prompt": prompt,
                     "model": model,
                     "is_new_session": is_new_session,
-                })
+                }, platform=target_platform)
 
                 start_time = time.time()
                 accumulated_text = ""
                 accumulated_thought = ""
+                # 快照回合開始時的連線：若這些連線全滅（分頁重載），即使有
+                # 新連線進來，原頁面上下文也已銷毀，不可能再回傳，必須速敗。
+                start_conns = set(self.active_connections)
 
                 while True:
                     remaining_timeout = timeout_sec - (time.time() - start_time)
                     if remaining_timeout <= 0:
                         self.logs.log("ERROR", "TURN", f"Turn {turn_id} timed out after {timeout_sec}s.")
+                        LOGGER.error(
+                            "⏱️ [WS TIMEOUT] Turn %s 等待 %ds 逾時 | 累積輸出: %d chars | 可能原因：分頁於回合中重新載入或未回傳任何事件",
+                            turn_id, timeout_sec, len(accumulated_text),
+                        )
                         yield TurnEvent(event_type="error", error=f"Gemini Web response timed out ({timeout_sec}s).")
                         break
 
@@ -303,6 +390,15 @@ class BrowserWebSocketHub:
                     except asyncio.TimeoutError:
                         if not self.is_connected:
                             yield TurnEvent(event_type="error", error="Browser extension disconnected during generation.")
+                            break
+                        if start_conns and not (start_conns & self.active_connections):
+                            self.logs.log("ERROR", "TURN",
+                                          f"Turn {turn_id} failed: page reloaded during generation.")
+                            LOGGER.error("🔄 [WS RELOAD] Turn %s 執行中分頁重新載入，原頁面上下文已銷毀", turn_id)
+                            yield TurnEvent(
+                                event_type="error",
+                                error="頁面在回合執行中重新載入（原分頁上下文已銷毀），請重送一次。",
+                            )
                             break
                         continue
 
