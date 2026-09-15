@@ -1,5 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
   const btnCapture = document.getElementById("btn-capture");
+  const btnDeepseek = document.getElementById("btn-deepseek");
+  const btnCleaner = document.getElementById("btn-cleaner");
   const btnCopyConfig = document.getElementById("btn-copy-config");
   const tabStatus = document.getElementById("tab-status");
   const msg = document.getElementById("msg");
@@ -23,10 +25,21 @@ document.addEventListener("DOMContentLoaded", () => {
     if (tabStatus) tabStatus.innerHTML = html;
   };
 
+  const epChip = document.getElementById("endpoint-chip");
+  if (epChip) {
+    epChip.addEventListener("click", () => {
+      navigator.clipboard.writeText("http://127.0.0.1:8765/v1").then(() => {
+        msg.textContent = "已複製端點 127.0.0.1:8765/v1";
+        msg.className = "msg ok";
+        setTimeout(() => { if (msg.textContent.includes("已複製端點")) msg.textContent = ""; }, 2000);
+      });
+    });
+  }
+
   const MODE_HINT = {
-    auto: "自動：Cookie 直連優先，失敗時 fallback 到瀏覽器分頁。",
-    direct: "直連：只用 Cookie 打 gemini.google.com，不需開分頁。ChatGPT 模型不適用。",
-    extension: "Web 視窗：強制走瀏覽器分頁（需開 gemini / chatgpt 分頁）。",
+    auto: "直連優先，分頁備援",
+    direct: "僅 Cookie 直連（不支援 ChatGPT）",
+    extension: "瀏覽器分頁轉發",
   };
 
   const paintTransport = (mode, extra) => {
@@ -55,11 +68,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const d = await r.json();
       const mode = d.mode || "auto";
       let extra = "";
-      if (mode === "direct" && !d.direct_configured) extra = "（尚未設定 Cookie，請先同步）";
-      if (mode === "extension" && !d.browser_connected) extra = "（尚未偵測到分頁，請開啟 gemini / chatgpt）";
+      if (mode === "direct" && !d.direct_configured) extra = "（未設定 Cookie）";
+      if (mode === "extension" && !d.browser_connected) extra = "（未連線分頁）";
       paintTransport(mode, extra);
     } catch (_) {
-      if (transportHint) transportHint.textContent = "伺服器未啟動，傳輸模式請到本地控制面板切換。";
+      if (transportHint) transportHint.textContent = "伺服器未啟動";
     }
   };
 
@@ -80,10 +93,10 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           const d = await r.json();
           paintTransport(d.mode || mode, "");
-          msg.textContent = "傳輸模式已切換：" + (d.mode || mode);
+          msg.textContent = "模式已切換：" + (d.mode || mode);
           msg.className = "msg ok";
         } catch (e) {
-          if (transportHint) transportHint.textContent = "切換失敗（伺服器未啟動？）：" + (e.message || e);
+          if (transportHint) transportHint.textContent = "切換失敗：" + (e.message || e);
         }
       });
     });
@@ -116,9 +129,9 @@ document.addEventListener("DOMContentLoaded", () => {
       forceNewChat: clean,
       autoDismissModals: chkAutoDismiss ? chkAutoDismiss.checked : true
     }, () => {
-      msg.textContent = "偏好設定已儲存";
+      msg.textContent = "設定已儲存";
       msg.className = "msg ok";
-      setTimeout(() => { if (msg.textContent.includes("偏好設定")) msg.textContent = ""; }, 2000);
+      setTimeout(() => { if (msg.textContent.includes("設定已儲存")) msg.textContent = ""; }, 2000);
     });
   };
 
@@ -130,11 +143,13 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!tabs || tabs.length === 0) return;
     const url = tabs[0].url || "";
     if (url.includes("chatgpt.com")) {
-      setTabStatus(true, "當前分頁：<strong>ChatGPT Web（免登入可用）</strong>");
+      setTabStatus(true, "<strong>ChatGPT Web</strong> 就緒");
     } else if (url.includes("gemini.google.com")) {
-      setTabStatus(true, "當前分頁：<strong>Google Gemini Web</strong>");
+      setTabStatus(true, "<strong>Gemini Web</strong> 就緒");
+    } else if (url.includes("deepseek.com")) {
+      setTabStatus(true, "<strong>DeepSeek Web</strong> 就緒");
     } else {
-      setTabStatus(false, "非支援分頁，請開啟 <a href='https://chatgpt.com' target='_blank'>chatgpt.com</a> 或 <a href='https://gemini.google.com' target='_blank'>gemini.google.com</a>");
+      setTabStatus(false, "未開啟支援分頁");
     }
   });
 
@@ -153,10 +168,11 @@ document.addEventListener("DOMContentLoaded", () => {
         },
       };
       navigator.clipboard.writeText(JSON.stringify(configJson, null, 2)).then(() => {
-        msg.textContent = "已複製 IDE 配置（webchat/auto）";
+        msg.textContent = "已複製 IDE 配置";
         msg.className = "msg ok";
+        setTimeout(() => { if (msg.textContent.includes("已複製 IDE 配置")) msg.textContent = ""; }, 2000);
       }).catch(() => {
-        msg.textContent = "複製失敗，請手動複製端點 127.0.0.1:8765/v1。";
+        msg.textContent = "複製失敗，請手動複製端點。";
         msg.className = "msg err";
       });
     });
@@ -193,10 +209,10 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (syncedToServer) {
-          msg.innerHTML = "已同步至本地 <code>gemini_cookies.json</code>（已自動複製備用）";
+          msg.innerHTML = "已同步 Cookie 至本機（已複製）";
           msg.className = "msg ok";
         } else {
-          msg.textContent = "Cookie 已複製至剪貼簿（伺服器未啟動時，可手動貼入 gemini_cookies.json）";
+          msg.textContent = "Cookie 已複製（本機伺服器未啟動）";
           msg.className = "msg ok";
         }
       } catch (e) {
@@ -204,6 +220,81 @@ document.addEventListener("DOMContentLoaded", () => {
         msg.className = "msg err";
       } finally {
         btnCapture.disabled = false;
+      }
+    });
+  }
+
+  if (btnCleaner) {
+    btnCleaner.addEventListener("click", async () => {
+      btnCleaner.disabled = true;
+      msg.textContent = "正在啟動批次刪除…";
+      msg.className = "msg";
+      try {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        const tab = tabs && tabs[0];
+        const url = (tab && tab.url) || "";
+        if (!tab || !url.includes("gemini.google.com")) {
+          throw new Error("請先開啟 gemini.google.com 分頁（批次刪除僅支援 Gemini）");
+        }
+        await chrome.tabs.sendMessage(tab.id, { type: "w2l-cleaner-start", autostart: false });
+        msg.textContent = "批次刪除面板已在分頁右上角開啟";
+        msg.className = "msg ok";
+      } catch (e) {
+        const raw = (e && e.message) ? e.message : String(e);
+        if (/receiving end does not exist|receiving end|no receiving end/i.test(raw)) {
+          msg.textContent = "分頁尚未載入擴充套件，請重新整理 Gemini 分頁後重試";
+        } else {
+          msg.textContent = raw;
+        }
+        msg.className = "msg err";
+      } finally {
+        btnCleaner.disabled = false;
+      }
+    });
+  }
+
+  if (btnDeepseek) {
+    btnDeepseek.addEventListener("click", async () => {
+      btnDeepseek.disabled = true;
+      msg.textContent = "正在讀取 DeepSeek Token…";
+      msg.className = "msg";
+      try {
+        const token = await fetchDeepSeekTokenFromPage();
+        const payload = JSON.stringify({ token, source: "extension-popup" }, null, 2);
+
+        // Auto copy to clipboard as backup (deepseek_token.json format)
+        try { await navigator.clipboard.writeText(payload); } catch (_) {}
+
+        // Try syncing to local server
+        msg.textContent = "正在同步至本地伺服器...";
+        let syncedToServer = false;
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 2000);
+          const resp = await fetch("http://127.0.0.1:8765/v1/deepseek/token", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payload,
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          if (resp.ok) syncedToServer = true;
+        } catch (_) {
+          syncedToServer = false;
+        }
+
+        if (syncedToServer) {
+          msg.innerHTML = "已同步 Token 至本機（已複製）";
+          msg.className = "msg ok";
+        } else {
+          msg.textContent = "Token 已複製（本機伺服器未啟動）";
+          msg.className = "msg ok";
+        }
+      } catch (e) {
+        msg.textContent = `${e.message || e}`;
+        msg.className = "msg err";
+      } finally {
+        btnDeepseek.disabled = false;
       }
     });
   }
@@ -248,4 +339,51 @@ async function getCookie(name) {
     });
   });
   return val || "";
+}
+
+// NOTE: serialized into the page via chrome.scripting.executeScript(world="MAIN"),
+// so it must stay fully self-contained (no outer closures).
+function readDeepSeekTokenMainWorld() {
+  try {
+    const raw = window.localStorage.getItem("userToken");
+    if (!raw) return { ok: false, error: "NOT_FOUND" };
+    try {
+      const obj = JSON.parse(raw);
+      const v = obj && (obj.value || obj.token || obj.userToken);
+      if (v && String(v).trim()) return { ok: true, token: String(v).trim() };
+      return { ok: false, error: "NO_VALUE" };
+    } catch (_) {
+      if (raw.trim()) return { ok: true, token: raw.trim() };
+      return { ok: false, error: "PARSE_FAIL" };
+    }
+  } catch (e) {
+    return { ok: false, error: "ACCESS_DENIED:" + ((e && e.message) || e) };
+  }
+}
+
+async function fetchDeepSeekTokenFromPage() {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0];
+  const url = (tab && tab.url) || "";
+  if (!tab || !url.includes("deepseek.com")) {
+    throw new Error("請先開啟 https://chat.deepseek.com/a/chat/ 並登入，再點擊此按鈕");
+  }
+  let results;
+  try {
+    results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: readDeepSeekTokenMainWorld,
+    });
+  } catch (e) {
+    throw new Error("無法讀取分頁內容（請確認已授權此網站）： " + (e.message || e));
+  }
+  const r = results && results[0] && results[0].result;
+  if (!r || !r.ok || !r.token) {
+    if (r && r.error === "NOT_FOUND") {
+      throw new Error("找不到 userToken，請確認已在該分頁登入 DeepSeek 後重試");
+    }
+    throw new Error("讀取 userToken 失敗（" + ((r && r.error) || "unknown") + "），請重新登入後重試");
+  }
+  return r.token;
 }

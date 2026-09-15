@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "WebChat to Local Bridge (Gemini & ChatGPT)",
-  "version": "2.9.3",
-  "description": "Bridge Google Gemini Web & ChatGPT Web chat and analysis tools to local development environments.",
-  "permissions": ["activeTab", "storage", "cookies", "alarms", "downloads"],
+  "version": "2.11.0",
+  "description": "Bridge Google Gemini Web & ChatGPT Web chat and analysis tools to local development environments. Also captures DeepSeek userToken for direct PoW calls.",
+  "permissions": ["activeTab", "storage", "cookies", "alarms", "downloads", "scripting"],
   "host_permissions": [
     "https://gemini.google.com/*",
     "https://*.google.com/*",
@@ -11,6 +11,8 @@
     "https://chatgpt.com/*",
     "https://*.chatgpt.com/*",
     "https://oaistatic.com/*",
+    "https://chat.deepseek.com/*",
+    "https://*.deepseek.com/*",
     "http://127.0.0.1:8765/*",
     "ws://127.0.0.1:8765/*"
   ],
@@ -46,6 +48,11 @@
         "content.js"
       ],
       "css": ["status_hud.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["gemini_cleaner.js"],
       "run_at": "document_idle"
     }
   ],

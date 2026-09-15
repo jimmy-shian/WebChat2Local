@@ -26,6 +26,7 @@ Thumbs.db
 
 # Credentials / cookies (never commit)
 gemini_cookies.json
+deepseek_token.json
 *.pem
 *.key
 *.pfx

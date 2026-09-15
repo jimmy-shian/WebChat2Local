@@ -11,7 +11,16 @@ import mimetypes
 from typing import List, Optional, Dict, Any
 
 from server.browser.gemini_direct import direct_engine, is_configured as direct_is_configured
+from server.browser.deepseek_direct import (
+    deepseek_engine,
+    is_configured as deepseek_is_configured,
+)
 from server.bridge.ws_hub import hub
+
+
+def _is_deepseek_target(model: str) -> bool:
+    m = (model or "").strip().lower()
+    return "deepseek" in m
 
 
 async def _execute_analysis(
@@ -27,6 +36,7 @@ async def _execute_analysis(
     is_chatgpt_target = (
         "chatgpt" in model.lower()
         or (hub.is_connected and hub.browser_info.get("platform") == "chatgpt")
+        and "deepseek" not in model.lower()
     )
     if is_chatgpt_target:
         if not hub.is_connected:
@@ -52,7 +62,21 @@ async def _execute_analysis(
             "provider": "ChatGPT",
         }
 
-    # 2. Try Gemini direct engine if configured (or mocked in tests)
+    # 2. DeepSeek direct engine (userToken + PoW, no browser tab needed)
+    if _is_deepseek_target(model):
+        try:
+            res = await deepseek_engine.generate_analysis(prompt=prompt, model=model, files=files)
+            res["provider"] = "DeepSeek"
+            return res
+        except Exception as e:
+            if not hub.is_connected and not direct_is_configured():
+                raise e
+            # Fall through to extension hub if DeepSeek direct failed but a
+            # browser tab is available (parity with the Gemini path below).
+            if not hub.is_connected:
+                raise e
+
+    # 3. Try Gemini direct engine if configured (or mocked in tests)
     try:
         res = await direct_engine.generate_analysis(prompt=prompt, model=model, files=files)
         res["provider"] = "Gemini"
@@ -62,7 +86,7 @@ async def _execute_analysis(
             # If direct failed and hub is also not connected, re-raise direct error
             raise e
 
-    # 3. Fallback to browser extension hub (Gemini or whatever is open)
+    # 4. Fallback to browser extension hub (Gemini or whatever is open)
     if hub.is_connected:
         accumulated_text = ""
         accumulated_thought = ""
@@ -88,7 +112,7 @@ async def _execute_analysis(
 
     raise RuntimeError(
         "瀏覽器擴充套件未連線 (請開啟 https://chatgpt.com 或 https://gemini.google.com)，"
-        "且未配置本機 Gemini Cookie。"
+        "且未配置本機 Gemini Cookie / DeepSeek Token。"
     )
 
 

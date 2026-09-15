@@ -33,6 +33,11 @@ from server.browser.gemini_direct import (
     save_cookies,
     load_cookies,
 )
+from server.browser.deepseek_direct import (
+    is_configured as deepseek_is_configured,
+    save_token as save_deepseek_token,
+    load_token as load_deepseek_token,
+)
 from server.doctor import run_doctor
 from server.mcp.tools_system import get_workspace_status
 from server.bridge.ws_hub import setup_clean_logging
@@ -282,6 +287,41 @@ async def save_cookies_endpoint(payload: dict):
 
 
 
+@app.post("/v1/deepseek/token")
+async def save_deepseek_token_endpoint(payload: dict):
+    """
+    Persist the DeepSeek userToken for the direct (Token + PoW) path.
+
+    取得方式：登入 https://chat.deepseek.com/a/chat/ 後，在 DevTools Console 執行
+      copy(JSON.parse(localStorage.getItem("userToken")).value)
+    再 POST {"token": "<貼上>"} 到此端點（或寫入 deepseek_token.json /
+    環境變數 DEEPSEEK_TOKEN）。
+    """
+    raw = str(
+        payload.get("token", "")
+        or payload.get("userToken", "")
+        or payload.get("user_token", "")
+        or payload.get("value", "")
+    ).strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="token is required.")
+    # Allow "Bearer xxx" and localStorage JSON blob; normalize for comparison.
+    from server.browser.deepseek_direct import _normalize_token
+    normalized = _normalize_token(raw)
+    current = load_deepseek_token()
+    if current.get("token") == normalized:
+        return {"status": "ok", "configured": True, "message": "Token unchanged"}
+
+    cookies = str(payload.get("cookies", "") or "").strip()
+    session_id = str(payload.get("session_id", "") or "").strip()
+    if not save_deepseek_token(normalized, session_id=session_id, cookies=cookies):
+        raise HTTPException(status_code=500, detail="Failed to write deepseek_token.json.")
+
+    hub.logs.log("INFO", "DEEPSEEK", "DeepSeek userToken updated via /v1/deepseek/token")
+    return {"status": "ok", "configured": deepseek_is_configured()}
+
+
+
 # ==========================================
 # Transport Mode (direct vs extension selection)
 # ==========================================
@@ -323,6 +363,7 @@ async def health_check():
         "version": VERSION,
         "browser_connected": hub.is_connected,
         "direct_configured": direct_is_configured(),
+        "deepseek_configured": deepseek_is_configured(),
         "transport_mode": get_mode(),
         "bridge_url": BASE_URL,
         "accepting_turns": not hub.is_draining,

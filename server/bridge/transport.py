@@ -25,6 +25,10 @@ from server.browser.gemini_direct import (
     is_configured as direct_is_configured,
     stream_generate as direct_stream_generate,
 )
+from server.browser.deepseek_direct import (
+    is_configured as deepseek_is_configured,
+    stream_generate as deepseek_stream_generate,
+)
 from server.bridge.ws_hub import hub
 
 VALID_MODES = ("auto", "direct", "extension")
@@ -69,6 +73,7 @@ def transport_snapshot() -> dict:
         "mode": get_mode(),
         "valid_modes": list(VALID_MODES),
         "direct_configured": direct_is_configured(),
+        "deepseek_configured": deepseek_is_configured(),
         "browser_connected": hub.is_connected,
         "platforms": platforms,
         "active_tabs": len(hub.active_connections),
@@ -96,6 +101,17 @@ def _direct_ok() -> bool:
     return bool(DIRECT_FALLBACK_ENABLED and direct_is_configured())
 
 
+def _deepseek_ok() -> bool:
+    try:
+        return bool(deepseek_is_configured())
+    except Exception:
+        return False
+
+
+def _is_deepseek_model(model: Optional[str]) -> bool:
+    return "deepseek" in (model or "").lower()
+
+
 def resolve_turn(
     prompt: str,
     model: str,
@@ -110,6 +126,7 @@ def resolve_turn(
     """
     mode = get_mode()
     is_chatgpt_req = "chatgpt" in (model or "").lower()
+    is_deepseek_req = _is_deepseek_model(model)
     is_generic = (model or "").strip().lower() in GENERIC_MODELS
 
     # ChatGPT 模型只能透過瀏覽器擴充套件（chatgpt.com 分頁）服務。
@@ -129,6 +146,24 @@ def resolve_turn(
             "已指定 ChatGPT 模型，但瀏覽器擴充套件尚未連線。"
             "請在 Chrome 或 Edge 開啟 https://chatgpt.com/ 頁面。"
         )
+
+    # DeepSeek 模型一律走 userToken + PoW 直連（無擴充套件路徑）。
+    # 不受 Gemini Cookie / transport mode 限制，mode 僅影響 Gemini/通用模型。
+    if is_deepseek_req:
+        if not _deepseek_ok():
+            raise TransportUnavailable(
+                "已指定 DeepSeek 模型，但尚未設定 DeepSeek Token。"
+                "請登入 https://chat.deepseek.com/a/chat/，在 DevTools Console 執行 "
+                "copy(JSON.parse(localStorage.getItem(\"userToken\")).value)，"
+                "存入 deepseek_token.json {\"token\": \"...\"} 或環境變數 DEEPSEEK_TOKEN。"
+            )
+        return deepseek_stream_generate(
+            prompt=prompt,
+            model=model,
+            session_id=session_id,
+            is_continuation=is_continuation,
+            files=files,
+        ), "deepseek-direct"
 
     if mode == "direct":
         if not DIRECT_FALLBACK_ENABLED:
@@ -184,6 +219,15 @@ def resolve_turn(
             is_continuation=is_continuation,
             files=files,
         ), "direct"
+    # 通用模型在無 Gemini Cookie 但有 DeepSeek Token 時改走 DeepSeek 直連。
+    if is_generic and _deepseek_ok():
+        return deepseek_stream_generate(
+            prompt=prompt,
+            model="deepseek-web/auto",
+            session_id=session_id,
+            is_continuation=is_continuation,
+            files=files,
+        ), "deepseek-direct"
     if hub.is_connected:
         plats = _connected_platforms() - {"unknown"}
         single = next(iter(plats)) if is_generic and len(plats) == 1 else None
@@ -191,5 +235,5 @@ def resolve_turn(
 
     raise TransportUnavailable(
         "瀏覽器擴充套件未連線 (請開啟 https://chatgpt.com 或 https://gemini.google.com)，"
-        "且沒有可用的 Gemini cookie 直連設定。"
+        "且沒有可用的 Gemini cookie / DeepSeek Token 直連設定。"
     )

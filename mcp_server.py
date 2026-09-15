@@ -22,6 +22,7 @@ from server.mcp.gemini_analysis_tools import (
 )
 from server.mcp.tools_system import doctor
 from server.browser.gemini_direct import load_cookies
+from server.browser.deepseek_direct import load_token as load_deepseek_token
 from server.bridge.ws_hub import hub
 
 mcp = MCPServer(
@@ -100,6 +101,11 @@ def webchat_models() -> str:
             {"id": "chatgpt-web/gpt-4o-mini", "name": "ChatGPT Web (GPT-4o mini)", "description": "Default free unlogged-in model"},
             {"id": "gemini-web/pro", "name": "Google Gemini 2.5 Pro (Web)", "supports_thinking": True},
             {"id": "gemini-web/flash", "name": "Google Gemini 2.5 Flash (Web)", "supports_thinking": True},
+            {"id": "deepseek-web/auto", "name": "DeepSeek Web (Auto, Direct)", "description": "DeepSeek userToken + PoW direct, defaults to reasoning", "supports_thinking": True},
+            {"id": "deepseek-web/chat", "name": "DeepSeek Web Chat (V3)", "description": "Fast non-thinking chat", "supports_thinking": False},
+            {"id": "deepseek-web/reasoner", "name": "DeepSeek Web Reasoner (R1)", "description": "DeepThink reasoning with thought process", "supports_thinking": True},
+            {"id": "deepseek-web/search", "name": "DeepSeek Web Search", "description": "Web search grounded answers", "supports_thinking": False},
+            {"id": "deepseek-web/reasoner-search", "name": "DeepSeek Reasoner+Search", "description": "Reasoning plus web search", "supports_thinking": True},
         ]
     }, ensure_ascii=False, indent=2)
 
@@ -109,14 +115,20 @@ def get_webchat_status() -> str:
     """Get the real-time connection status of WebChat platforms (ChatGPT and Gemini)."""
     cookies = load_cookies()
     has_psid = bool(cookies.get("1psid"))
+    try:
+        has_ds = bool(load_deepseek_token().get("token"))
+    except Exception:
+        has_ds = False
     browser_connected = hub.is_connected
     active_platform = hub.browser_info.get("platform", "None")
     return json.dumps({
-        "bridge_status": "[READY] WebChat Analysis MCP Ready" if (has_psid or browser_connected) else "[WAITING] Connect browser or set cookies",
+        "bridge_status": "[READY] WebChat Analysis MCP Ready" if (has_psid or has_ds or browser_connected) else "[WAITING] Connect browser or set cookies",
         "browser_connected": browser_connected,
         "browser_platform": active_platform,
         "gemini_cookie_configured": has_psid,
-        "available_models": ["webchat/auto", "chatgpt-web/auto", "chatgpt-web/gpt-4o-mini", "gemini-web/pro", "gemini-web/flash"],
+        "deepseek_token_configured": has_ds,
+        "available_models": ["webchat/auto", "chatgpt-web/auto", "chatgpt-web/gpt-4o-mini", "gemini-web/pro", "gemini-web/flash",
+                             "deepseek-web/auto", "deepseek-web/chat", "deepseek-web/reasoner", "deepseek-web/search", "deepseek-web/reasoner-search"],
     }, ensure_ascii=False, indent=2)
 
 
@@ -141,6 +153,18 @@ def print_doctor_report():
         print(f"[*] 1PSIDTS: {'Configured' if cookies.get('1psidts') else 'Not set'}")
     else:
         print("[-] Gemini Cookie: Not set (Gemini web extension or cookies needed for direct Gemini)")
+    try:
+        ds = load_deepseek_token()
+        has_ds = bool(ds.get("token"))
+    except Exception:
+        has_ds = False
+        ds = {}
+    print(f"[*] DeepSeek Token Configured: {has_ds}")
+    if has_ds:
+        tok = ds.get("token", "")
+        print(f"[*] userToken: {tok[:8]}... (Total length: {len(tok)})")
+    else:
+        print("[-] DeepSeek Token: Not set (see deepseek_token.example.json, POST /v1/deepseek/token)")
 
     print(f"[*] Browser Extension Connected: {hub.is_connected}")
     if hub.is_connected:

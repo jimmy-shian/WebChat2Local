@@ -13,115 +13,138 @@
     }
     *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
     body{
-      width:340px;margin:0;padding:14px;
-      font:13px/1.6 var(--sans);color:var(--ink);background:var(--bg);
+      width:340px;max-height:520px;margin:0;padding:10px 12px;
+      overflow-y:auto;overflow-x:hidden;
+      font:12px/1.45 var(--sans);color:var(--ink);background:var(--bg);
     }
-    /* 頁首：與儀表板 brand 對齊 */
-    .brand{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+    /* 頁首：品牌 + 版本號 + 控制面板入口 */
+    .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+    .brand{display:flex;align-items:center;gap:7px}
     .mark{
-      width:32px;height:32px;flex:none;border:1px solid var(--line);border-radius:10px;
+      width:24px;height:24px;flex:none;border:1px solid var(--line);border-radius:6px;
       display:flex;align-items:center;justify-content:center;background:var(--panel);color:var(--accent);
     }
-    .brand h1{font-size:14px;font-weight:650;display:flex;align-items:center;gap:6px}
-    .brand .sub{font-size:12px;color:var(--muted)}
-    .ver{font:11px var(--mono);font-weight:500;color:var(--muted);background:var(--panel-2);
-      border:1px solid var(--line);border-radius:999px;padding:0 7px;line-height:18px;white-space:nowrap}
-    /* 通用面板 */
-    .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:12px}
+    .brand h1{font-size:13px;font-weight:650;display:flex;align-items:center;gap:5px}
+    .ver{font:10px var(--mono);font-weight:500;color:var(--muted);background:var(--panel-2);
+      border:1px solid var(--line);border-radius:999px;padding:0 5px;line-height:16px}
+    .dash-link{
+      display:inline-flex;align-items:center;gap:3px;font-size:11px;color:var(--muted);
+      text-decoration:none;border:1px solid var(--line);border-radius:6px;padding:2px 7px;background:var(--panel);
+      transition:all .15s;
+    }
+    .dash-link:hover{color:var(--accent);border-color:var(--accent);background:#f0f7ff}
+
+    /* 緊湊面板 */
+    .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-bottom:8px}
     .panel:last-child{margin-bottom:0}
-    .panel h2{font-size:13px;font-weight:650;margin-bottom:8px}
-    .hint{font-size:12px;color:var(--muted)}
-    .mono{font-family:var(--mono)}
-    /* 狀態列 */
-    .stat{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
-      border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;background:var(--panel-2);margin-bottom:6px}
-    .stat:last-child{margin-bottom:0}
-    .stat .label{font-size:12px;color:var(--muted);white-space:nowrap;flex:none}
-    .stat .value{font:12px var(--mono);text-align:right;word-break:break-all}
-    .row{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
-    .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+
+    /* 狀態列整合 */
+    .status-bar{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:11.5px}
+    .tab-row{display:flex;align-items:center;gap:6px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
     .dot.ok{background:var(--ok)}
     .dot.bad{background:var(--err)}
-    .row strong{color:var(--ink);font-weight:600}
-    .row a{color:var(--accent);text-decoration:none}
-    /* 偏好設定 */
-    .setting-item{display:flex;align-items:flex-start;gap:8px;font-size:12px;cursor:pointer;
-      border:1px solid var(--line-soft);border-radius:8px;padding:8px 10px;background:var(--panel-2);margin-bottom:6px}
-    .setting-item:last-child{margin-bottom:0}
-    .setting-item input[type="checkbox"]{margin-top:3px;cursor:pointer;accent-color:var(--accent)}
-    .setting-desc{color:var(--muted);font-size:12px;margin-top:1px}
-    /* 傳輸模式三段選擇 */
-    .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-bottom:6px}
-    .seg button{flex:1;border:0;background:var(--panel-2);padding:7px 4px;font-size:12px;cursor:pointer;color:var(--muted)}
+    .endpoint-chip{
+      font:10.5px var(--mono);color:var(--muted);background:var(--panel-2);border:1px solid var(--line-soft);
+      border-radius:4px;padding:1px 5px;cursor:pointer;flex:none;transition:all .15s;
+    }
+    .endpoint-chip:hover{color:var(--accent);border-color:var(--accent)}
+
+    /* 傳輸分段按鈕 + 微型提示 */
+    .seg-wrap{display:flex;flex-direction:column;gap:5px}
+    .seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+    .seg button{
+      flex:1;border:0;background:var(--panel-2);padding:5px 0;font-size:11.5px;
+      cursor:pointer;color:var(--muted);transition:background .15s,color .15s;
+    }
     .seg button+button{border-left:1px solid var(--line-soft)}
     .seg button.active{background:var(--accent);color:#fff;font-weight:600}
-    /* 按鈕：與儀表板 .btn 一致 */
-    .btn{
-      display:block;width:100%;border:1px solid var(--line);background:var(--panel-2);color:var(--ink);
-      border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;text-align:center;text-decoration:none;
-      box-sizing:border-box;margin-bottom:6px;
+    .hint{font-size:11px;color:var(--muted);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+    /* 緊湊會話設定 */
+    .settings-grid{display:flex;flex-direction:column;gap:5px}
+    .setting-label{
+      display:flex;align-items:center;gap:6px;font-size:11.5px;cursor:pointer;
+      padding:4px 6px;border-radius:5px;background:var(--panel-2);border:1px solid var(--line-soft);
+      user-select:none;transition:border-color .15s;
     }
-    .btn:last-of-type{margin-bottom:0}
+    .setting-label:hover{border-color:#d4d4d8}
+    .setting-label input[type="checkbox"]{margin:0;cursor:pointer;accent-color:var(--accent);flex:none}
+
+    /* 2x2 緊湊操作網格 */
+    .action-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .btn{
+      display:inline-flex;align-items:center;justify-content:center;
+      border:1px solid var(--line);background:var(--panel-2);color:var(--ink);
+      border-radius:6px;padding:6px 8px;font-size:11.5px;font-weight:500;
+      cursor:pointer;text-align:center;text-decoration:none;box-sizing:border-box;
+      transition:all .15s;white-space:nowrap;
+    }
     .btn:hover{background:#f1f1f3;border-color:#d4d4d8}
     .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
     .btn.primary:hover{background:var(--accent-dark)}
     .btn:disabled{opacity:.45;cursor:not-allowed}
-    .msg{font-size:12px;color:var(--muted);margin-top:8px;min-height:16px}
+
+    /* 狀態訊息列 */
+    .msg{font-size:11px;color:var(--muted);margin-top:6px;min-height:0;text-align:center;transition:all .2s}
+    .msg:empty{display:none}
     .msg.ok{color:var(--ok)}
     .msg.err{color:var(--err)}
-    .msg code{font-family:var(--mono);font-size:12px}
+    .msg code{font-family:var(--mono);font-size:11px}
   </style>
 </head>
 <body>
-  <div class="brand">
-    <div class="mark" aria-hidden="true">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="8"/></svg>
-    </div>
-    <div>
+  <div class="header">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="8"/></svg>
+      </div>
       <h1>WebChat2Local <span class="ver" id="ext-version">v…</span></h1>
-      <div class="sub">Gemini / ChatGPT Web → 本機橋接</div>
     </div>
+    <a href="http://127.0.0.1:8765" target="_blank" class="dash-link" title="開啟本地控制面板">控制面板 ↗</a>
   </div>
 
   <section class="panel">
-    <h2>連線狀態</h2>
-    <div class="stat"><span class="label">伺服器端點</span><span class="value">127.0.0.1:8765/v1</span></div>
-    <div class="row" style="margin-top:8px"><span class="dot" id="tab-dot"></span><span id="tab-status">正在偵測當前分頁…</span></div>
-  </section>
-
-  <section class="panel">
-    <h2>傳輸模式</h2>
-    <div class="seg" id="transport-seg">
-      <button type="button" data-mode="auto">自動</button>
-      <button type="button" data-mode="direct">直連</button>
-      <button type="button" data-mode="extension">Web 視窗</button>
+    <div class="status-bar">
+      <div class="tab-row">
+        <span class="dot" id="tab-dot"></span>
+        <span id="tab-status">偵測分頁中…</span>
+      </div>
+      <span class="endpoint-chip" id="endpoint-chip" title="點擊複製 API 端點">127.0.0.1:8765/v1</span>
     </div>
-    <div id="transport-hint" class="hint">讀取中…</div>
   </section>
 
   <section class="panel">
-    <h2>會話設定</h2>
-    <label class="setting-item">
-      <input type="checkbox" id="setting-clean-session">
-      <div>
-        <div><strong>每輪使用乾淨會話</strong></div>
-        <div class="setting-desc">送出前開新對話；ChatGPT 訪客模式另在回合後重載，避免舊紀錄污染下一輪。</div>
+    <div class="seg-wrap">
+      <div class="seg" id="transport-seg">
+        <button type="button" data-mode="auto">自動</button>
+        <button type="button" data-mode="direct">直連</button>
+        <button type="button" data-mode="extension">Web 視窗</button>
       </div>
-    </label>
-    <label class="setting-item">
-      <input type="checkbox" id="setting-auto-dismiss">
-      <div>
-        <div><strong>自動關閉登入提示</strong></div>
-        <div class="setting-desc">訪客模式下自動關閉登入彈窗，不中斷傳送流程。</div>
-      </div>
-    </label>
+      <div id="transport-hint" class="hint">讀取中…</div>
+    </div>
   </section>
 
   <section class="panel">
-    <h2>快速操作</h2>
-    <button id="btn-capture" class="btn primary">同步 Cookie（自動複製備用）</button>
-    <button id="btn-copy-config" class="btn">複製 IDE 配置</button>
-    <a href="http://127.0.0.1:8765" target="_blank" class="btn" style="margin-top:6px">開啟本地控制面板</a>
+    <div class="settings-grid">
+      <label class="setting-label">
+        <input type="checkbox" id="setting-clean-session">
+        <span>每輪重置會話 (避免上下文干擾)</span>
+      </label>
+      <label class="setting-label">
+        <input type="checkbox" id="setting-auto-dismiss">
+        <span>自動關閉登入彈窗 (訪客模式)</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="action-grid">
+      <button id="btn-capture" class="btn primary">同步 Cookie</button>
+      <button id="btn-deepseek" class="btn">DeepSeek Token</button>
+      <button id="btn-cleaner" class="btn">批次清理對話</button>
+      <button id="btn-copy-config" class="btn">複製 IDE 配置</button>
+    </div>
     <div id="msg" class="msg"></div>
   </section>
 

@@ -113,12 +113,39 @@ def check_extension_readiness() -> Dict[str, Any]:
     }
 
 
+def check_direct_transports() -> Dict[str, Any]:
+    """Checks Gemini cookie and DeepSeek token direct-path readiness."""
+    try:
+        from server.browser.gemini_direct import is_configured as gemini_ok
+        gemini_ready = bool(gemini_ok())
+    except Exception:
+        gemini_ready = False
+    try:
+        from server.browser.deepseek_direct import is_configured as ds_ok
+        ds_ready = bool(ds_ok())
+    except Exception:
+        ds_ready = False
+    if gemini_ready and ds_ready:
+        return {"id": "direct_transports", "status": "ok",
+                "message": "Gemini cookie + DeepSeek token both configured",
+                "detail": "direct + deepseek-direct transports ready"}
+    if gemini_ready or ds_ready:
+        which = "Gemini cookie" if gemini_ready else "DeepSeek token"
+        return {"id": "direct_transports", "status": "ok",
+                "message": f"Direct transport ready ({which})",
+                "detail": f"gemini={gemini_ready}, deepseek={ds_ready}"}
+    return {"id": "direct_transports", "status": "warning",
+            "message": "No direct transport configured (Gemini cookie / DeepSeek token missing)",
+            "detail": "Set gemini_cookies.json or deepseek_token.json for browser-free calls."}
+
+
 def run_doctor() -> Dict[str, Any]:
     """Runs all doctor checks and returns unified report."""
     checks = [
         check_python_environment(),
         check_server_port(),
         check_extension_readiness(),
+        check_direct_transports(),
         check_antigravity_integration(),
     ]
 
