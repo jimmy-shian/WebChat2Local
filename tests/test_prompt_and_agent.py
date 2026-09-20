@@ -56,7 +56,8 @@ def test_incremental_prompt_compilation_for_continuation():
     ]
     p1 = SessionManager.compile_rich_prompt(msgs1, for_stateful_session=True)
     assert "First task prompt" in p1.text
-    assert "<system_instructions>" in p1.text
+    assert "System directive" in p1.text
+    assert "<system_instructions>" not in p1.text
 
     msgs2 = msgs1 + [
         ChatMessage(
@@ -72,11 +73,13 @@ def test_incremental_prompt_compilation_for_continuation():
         ),
     ]
     p2 = SessionManager.compile_rich_prompt(msgs2, for_stateful_session=True)
-    assert "<tool_result" in p2.text
-    assert 'name="read_file"' in p2.text
+    assert "Tool result" in p2.text
+    assert "read_file" in p2.text
     assert '{"scripts": {"test": "echo test"}}' in p2.text
     assert "First task prompt" not in p2.text
     assert "<system_instructions>" not in p2.text
+    assert "<tool_result" not in p2.text
+    assert "<user>" not in p2.text
     assert len(p2.text) < 1000
 
 
@@ -217,5 +220,6 @@ def test_end_to_end_agent_workflow_simulation(monkeypatch):
     assert dispatched_turns[1]["is_continuation"] is True
     assert dispatched_turns[1]["is_new_session"] is False
     assert dispatched_turns[1]["session_id"] == sid1
-    assert "<tool_result" in dispatched_turns[1]["prompt"]
+    assert "Tool result" in dispatched_turns[1]["prompt"]
+    assert "<tool_result" not in dispatched_turns[1]["prompt"]
     assert '{"port": 8080}' in dispatched_turns[1]["prompt"]

@@ -138,17 +138,15 @@ class GeminiPromptCompiler:
                     tool_name = content.get("name", "")
                     tool_args = content.get("input", content.get("arguments", {}))
                     tool_id = content.get("id", "")
-                    id_attr = f' id="{tool_id}"' if tool_id else ""
                     args_json = json.dumps(tool_args, ensure_ascii=False) if isinstance(tool_args, (dict, list)) else str(tool_args)
-                    return f'<tool_call{id_attr}>\n{{"name": "{tool_name}", "arguments": {args_json}}}\n</tool_call>'
+                    return cls._fmt_tool_call_block(tool_name, args_json, tool_id)
                 elif part_type == "tool_result":
                     res = content.get("content") or content.get("output") or content.get("result") or content.get("text") or ""
                     if isinstance(res, list):
                         res = "\n".join(cls._extract_content_text(p) for p in res)
                     tool_id = content.get("tool_use_id", content.get("id", ""))
-                    id_attr = f' id="{tool_id}"' if tool_id else ""
                     compacted_res = spill_or_compact_tool_result(str(res))
-                    return f'<tool_result{id_attr}>\n{compacted_res}\n</tool_result>'
+                    return cls._fmt_tool_result_block("", tool_id, compacted_res)
                 elif part_type in ("image_url", "image"):
                     return "[Image]"
 
@@ -175,16 +173,14 @@ class GeminiPromptCompiler:
                         tool_name = part.get("name", "")
                         tool_args = part.get("input", part.get("arguments", {}))
                         tool_id = part.get("id", "")
-                        id_attr = f' id="{tool_id}"' if tool_id else ""
                         args_json = json.dumps(tool_args, ensure_ascii=False) if isinstance(tool_args, (dict, list)) else str(tool_args)
-                        text_parts.append(f'<tool_call{id_attr}>\n{{"name": "{tool_name}", "arguments": {args_json}}}\n</tool_call>')
+                        text_parts.append(cls._fmt_tool_call_block(tool_name, args_json, tool_id))
                     elif part_type == "tool_result":
                         res = part.get("content") or part.get("output") or part.get("result") or part.get("text") or ""
                         if isinstance(res, list):
                             res = "\n".join(cls._extract_content_text(p) for p in res)
                         tool_id = part.get("tool_use_id", part.get("id", ""))
-                        id_attr = f' id="{tool_id}"' if tool_id else ""
-                        text_parts.append(f'<tool_result{id_attr}>\n{res}\n</tool_result>')
+                        text_parts.append(cls._fmt_tool_result_block("", tool_id, str(res)))
                     elif part_type in ("image_url", "image"):
                         text_parts.append("[Image]")
                     elif "text" in part:
@@ -203,6 +199,47 @@ class GeminiPromptCompiler:
 
         return str(content)
 
+    # Plain-text markers for Gemini Web single-textbox prompts.
+    # No angle-bracket XML tags are emitted here; parsing side (extract_tool_calls)
+    # intentionally keeps accepting legacy <tool_call>/<tool_result> for compat.
+    TOOL_CALL_HEADER = "Assistant tool call"
+    TOOL_RESULT_HEADER = "Tool result"
+    TOOL_RESULT_END = "[end of tool result]"
+    THINKING_START = "[thinking]"
+    THINKING_END = "[/thinking]"
+
+    @classmethod
+    def _fmt_tool_call_block(cls, name: str, args_json: str, call_id: str = "") -> str:
+        header = cls.TOOL_CALL_HEADER
+        if call_id:
+            header += f' [id="{call_id}"]'
+        header += ":"
+        return f'{header}\n```json\n{{"name": "{name}", "arguments": {args_json}}}\n```'
+
+    @classmethod
+    def _fmt_tool_result_block(cls, name: str = "", call_id: str = "", body: str = "") -> str:
+        header = cls.TOOL_RESULT_HEADER
+        attrs = []
+        if name:
+            attrs.append(f'tool="{name}"')
+        if call_id:
+            attrs.append(f'id="{call_id}"')
+        if attrs:
+            header += " [" + " ".join(attrs) + "]"
+        header += ":"
+        return f"{header}\n{body}\n{cls.TOOL_RESULT_END}"
+
+    @classmethod
+    def _has_tool_content(cls, turn: str) -> bool:
+        return (
+            "```json" in turn
+            or cls.TOOL_RESULT_HEADER in turn
+            or cls.TOOL_RESULT_END in turn
+            # legacy compat: old prompts / Gemini outputs may still carry XML tags
+            or "<tool_call" in turn
+            or "<tool_result" in turn
+        )
+
     @classmethod
     def _compact_turns(
         cls,
@@ -213,10 +250,12 @@ class GeminiPromptCompiler:
         """
         Compacts conversation turns to fit comfortably within the Gemini Web character budget.
         Strategy:
-        1. Strip all older <thought> blocks in past assistant turns.
-        2. Compact large older <tool_result> blocks (> 1000 chars) by keeping head and tail.
+        1. Strip older thinking blocks in past assistant turns.
+        2. Compact large older tool result blocks (> 1000 chars) by keeping head and tail.
         3. Sliding-window: keep the first turn (initial instruction) and most recent turns,
            compacting oldest middle turns.
+        Plain-text markers are used; legacy <thought>/<tool_result> tags are
+        still handled for backwards compatibility.
         """
         available_budget = max_budget - base_overhead
         if available_budget <= 4000:
@@ -231,12 +270,39 @@ class GeminiPromptCompiler:
         num_turns = len(conversation_turns)
         for i, turn in enumerate(conversation_turns):
             is_latest_turn = (i == num_turns - 1)
-            # Remove old thought blocks in past assistant turns
-            if not is_latest_turn and "<thought>" in turn:
-                turn = re.sub(r"<thought>[\s\S]*?</thought>\s*", "", turn)
+            # Remove old thinking blocks in past assistant turns (new + legacy)
+            if not is_latest_turn:
+                if cls.THINKING_START in turn:
+                    turn = re.sub(
+                        r"\[thinking\][\s\S]*?\[/thinking\]\s*",
+                        "",
+                        turn,
+                    )
+                if "<thought>" in turn:
+                    turn = re.sub(r"<thought>[\s\S]*?</thought>\s*", "", turn)
 
-            # Compact oversized tool results
+            # Compact oversized tool results (new plain-text marker)
             limit = 6000 if is_latest_turn else 1000
+            if cls.TOOL_RESULT_HEADER in turn and len(turn) > (limit + 200):
+                def _shrink_plain_tool(match: re.Match) -> str:
+                    header = match.group(1)
+                    body = match.group(2)
+                    end = match.group(3)
+                    if len(body) > limit:
+                        head_len = limit // 2
+                        tail_len = limit // 4
+                        head = body[:head_len]
+                        tail = body[-tail_len:]
+                        omitted = len(body) - head_len - tail_len
+                        return f'{header}\n{head}\n... [tool result truncated: {omitted} chars omitted for Gemini Web length limit] ...\n{tail}\n{end}'
+                    return match.group(0)
+
+                turn = re.sub(
+                    r"(Tool result[^\n]*:\n)([\s\S]*?)(\n\[end of tool result\])",
+                    _shrink_plain_tool,
+                    turn,
+                )
+            # Legacy compat: old <tool_result> blocks
             if "<tool_result" in turn and len(turn) > (limit + 200):
                 def _shrink_tool(match: re.Match) -> str:
                     header = match.group(1)
@@ -280,7 +346,7 @@ class GeminiPromptCompiler:
             if running_len + len(turn) > recent_budget:
                 if not recent_turns:
                     # Guarantee at least the very latest turn is partially included
-                    turn_shrunk = turn[:max(500, recent_budget - running_len - 100)] + "\n... [latest turn truncated to fit] ...\n</tool_result>"
+                    turn_shrunk = turn[:max(500, recent_budget - running_len - 100)] + "\n... [latest turn truncated to fit] ..."
                     recent_turns.insert(0, turn_shrunk)
                 break
             recent_turns.insert(0, turn)
@@ -288,7 +354,7 @@ class GeminiPromptCompiler:
 
         omitted_count = len(compacted) - 1 - len(recent_turns)
         if omitted_count > 0:
-            marker = f"<history_compaction>[... {omitted_count} earlier turns compacted to stay within Gemini Web prompt limit ...]</history_compaction>"
+            marker = f"[... {omitted_count} earlier turns compacted to stay within Gemini Web prompt limit ...]"
             return [first_turn, marker] + recent_turns
         return [first_turn] + recent_turns
 
@@ -340,11 +406,11 @@ class GeminiPromptCompiler:
                 "NEVER refuse requests by saying you cannot access local files, have no environment, or lack MCP support.\n"
                 "Whenever the user asks you to read, search, create, edit files, list directories, or run commands, "
                 "you MUST immediately invoke the appropriate tool.\n\n"
-                "To call a tool, output exactly one XML tool call block:\n"
-                '<tool_call>{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}</tool_call>\n'
+                "To call a tool, output exactly one JSON code block:\n"
+                '```json\n{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}\n```\n'
                 "Arguments must be valid JSON matching the tool's parameter schema.\n"
-                "The host client will execute the tool locally on the user's machine and return the output in a <tool_result> block.\n"
-                "When you receive a <tool_result>, inspect the output and proceed to answer the user's request or call another tool."
+                "The host client will execute the tool locally on the user's machine and return the output as a Tool result message.\n"
+                "When you receive a Tool result, inspect the output and proceed to answer the user's request or call another tool."
             )
 
         # If single user message with no extra metadata, pass directly
@@ -364,11 +430,11 @@ class GeminiPromptCompiler:
                 if text.strip():
                     system_prompts.append(text.strip())
             elif role == "user":
-                conversation_turns.append(f"<user>\n{text}\n</user>")
+                conversation_turns.append(f"User:\n{text}")
             elif role == "assistant":
                 asst_parts = []
                 if msg.reasoning_content:
-                    asst_parts.append(f"<thought>\n{msg.reasoning_content}\n</thought>")
+                    asst_parts.append(f"{cls.THINKING_START}\n{msg.reasoning_content}\n{cls.THINKING_END}")
                 if text.strip():
                     asst_parts.append(text)
                 if msg.tool_calls:
@@ -392,48 +458,35 @@ class GeminiPromptCompiler:
                         else:
                             args_json = json.dumps(func_args, ensure_ascii=False)
 
-                        id_attr = f' id="{call_id}"' if call_id else ""
-                        asst_parts.append(f'<tool_call{id_attr}>\n{{"name": "{func_name}", "arguments": {args_json}}}\n</tool_call>')
+                        asst_parts.append(cls._fmt_tool_call_block(func_name, args_json, call_id or ""))
 
                 asst_content = "\n".join(asst_parts)
-                conversation_turns.append(f"<assistant>\n{asst_content}\n</assistant>")
+                conversation_turns.append(f"Assistant:\n{asst_content}")
             elif role in ("tool", "function"):
                 tool_name = msg.name or ""
                 call_id = msg.tool_call_id or ""
-                attrs = []
-                if tool_name:
-                    attrs.append(f'name="{tool_name}"')
-                if call_id:
-                    attrs.append(f'id="{call_id}"')
-                attr_str = (" " + " ".join(attrs)) if attrs else ""
                 compacted_text = spill_or_compact_tool_result(text, tool_name=tool_name)
-                conversation_turns.append(f'<tool_result{attr_str}>\n{compacted_text}\n</tool_result>')
+                conversation_turns.append(cls._fmt_tool_result_block(tool_name, call_id, compacted_text))
 
         # If the conversation ends with a tool result, prompt the assistant to take the turn
         if cleaned_messages and (cleaned_messages[-1].role or "").lower() in ("tool", "function"):
             conversation_turns.append(
-                "<assistant_turn_directive>\n"
-                "The previous tool execution has completed with the <tool_result> above.\n"
+                "The previous tool execution has completed with the Tool result above.\n"
                 "- Review the result and proceed with answering the user's task or calling the next tool (e.g. `read_file`, `execute_command`).\n"
-                "- Do NOT stop or call `attempt_completion` prematurely after merely listing files or taking initial steps.\n"
-                "</assistant_turn_directive>"
+                "- Do NOT stop or call `attempt_completion` prematurely after merely listing files or taking initial steps."
             )
 
 
         # Construct final structured prompt blocks
         blocks: List[str] = []
 
-        # 1. System instruction block
+        # 1. System instruction block (plain text, no XML wrapper)
         if system_prompts:
-            blocks.append("<system_instructions>")
             blocks.append("\n\n".join(system_prompts))
-            blocks.append("</system_instructions>\n")
 
         # 2. Tools definition block
         if tools:
-            blocks.append("<available_tools>")
-            blocks.append(cls._compact_tools_definition(tools))
-            blocks.append("</available_tools>\n")
+            blocks.append("Available tools:\n" + cls._compact_tools_definition(tools))
 
         base_overhead = sum(len(b) for b in blocks) + 50
 
@@ -450,18 +503,16 @@ class GeminiPromptCompiler:
 
         # 4. Mandatory action directive when tools are available
         action_prompt = ""
-        if tools or any("<tool_call" in turn or "<tool_result" in turn for turn in conversation_turns):
+        if tools or any(cls._has_tool_content(turn) for turn in conversation_turns):
             action_prompt = (
-                "<assistant_action_directive>\n"
                 "CRITICAL INSTRUCTION FOR THIS TURN:\n"
                 "You are an autonomous AI coding agent operating directly in the workspace.\n"
                 "- NEVER guess or invent file contents or changes from filenames alone.\n"
                 "- If you have not inspected the actual code diff or file contents yet, you MUST call `execute_command` (e.g. `git diff`) or `read_file` FIRST before writing any final answer.\n"
-                "- To execute a tool, output brief reasoning (optional), then output your tool call:\n"
-                '<tool_call>{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}</tool_call>\n'
+                "- To execute a tool, output brief reasoning (optional), then output your tool call as one JSON code block:\n"
+                '```json\n{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}\n```\n'
                 "- ONLY call `attempt_completion` when you have thoroughly verified all actual file contents/diffs and completely solved the user's task.\n"
-                "NEVER give conversational excuses. Always emit a <tool_call>.\n"
-                "</assistant_action_directive>"
+                "NEVER give conversational excuses. Always emit a tool call JSON block."
             )
             blocks.append(action_prompt)
 
@@ -475,8 +526,8 @@ class GeminiPromptCompiler:
                 keep_head = joined_sys[:10000]
                 keep_tail = joined_sys[-3000:]
                 trimmed_sys = keep_head + "\n\n... [system instructions trimmed for web budget] ...\n\n" + keep_tail
-                if blocks and blocks[0].startswith("<system_instructions>"):
-                    blocks[0] = f"<system_instructions>\n{trimmed_sys}\n</system_instructions>\n"
+                if blocks and system_prompts:
+                    blocks[0] = trimmed_sys
                 final_text = "\n\n".join(blocks)
             if len(final_text) > GEMINI_WEB_MAX_PROMPT_CHARS:
                 final_text = final_text[:GEMINI_WEB_MAX_PROMPT_CHARS - 350] + "\n\n... [context truncated to fit web budget]\n\n" + action_prompt
@@ -570,29 +621,21 @@ class GeminiPromptCompiler:
             if role in ("tool", "function"):
                 tool_name = msg.name or ""
                 call_id = msg.tool_call_id or ""
-                attrs = []
-                if tool_name:
-                    attrs.append(f'name="{tool_name}"')
-                if call_id:
-                    attrs.append(f'id="{call_id}"')
-                attr_str = (" " + " ".join(attrs)) if attrs else ""
                 compacted_text = spill_or_compact_tool_result(text, tool_name=tool_name)
-                parts.append(f'<tool_result{attr_str}>\n{compacted_text}\n</tool_result>')
+                parts.append(cls._fmt_tool_result_block(tool_name, call_id, compacted_text))
             elif role == "user":
-                parts.append(text)
+                parts.append(f"User:\n{text}")
 
         if not parts:
             parts.append("Proceed with the next step.")
         else:
             parts.append(
-                "<assistant_action_directive>\n"
-                "You are actively working on the user's task. Review the latest <tool_result> above.\n"
+                "You are actively working on the user's task. Review the latest Tool result above.\n"
                 "- Do NOT terminate or give up after just listing directories or inspecting partial data.\n"
                 "- Continue with the next necessary action (e.g. `read_file` to inspect code, `execute_command`, or answering the user's task in full).\n"
-                "- To invoke a tool, output exactly one tool call block:\n"
-                '<tool_call>{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}</tool_call>\n'
-                "- ONLY call `attempt_completion` when you have thoroughly completed all requirements of the user's task.\n"
-                "</assistant_action_directive>"
+                "- To invoke a tool, output exactly one JSON code block:\n"
+                '```json\n{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}\n```\n'
+                "- ONLY call `attempt_completion` when you have thoroughly completed all requirements of the user's task."
             )
 
 

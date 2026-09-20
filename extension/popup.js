@@ -162,7 +162,7 @@ document.addEventListener("DOMContentLoaded", () => {
         openAiModelId: "webchat/auto",
         customModelInfo: {
           supportsPromptCache: false,
-          maxTokens: 4096,
+          maxTokens: 16384,
           contextWindow: 32768,
           supportsThinking: true,
         },

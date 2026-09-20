@@ -139,7 +139,7 @@
   }
 
   function looksLikeSse(raw) {
-    const t = raw.slice(0, 4096).trimStart();
+    const t = raw.slice(0, 16384).trimStart();
     return t.startsWith("data:") || t.startsWith("event:") || /\n\s*data:/.test(t);
   }
 

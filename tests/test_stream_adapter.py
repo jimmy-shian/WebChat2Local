@@ -106,9 +106,10 @@ def test_session_manager_prompt_compilation():
         ChatMessage(role="user", content="Show me project files."),
     ]
     prompt = SessionManager.compile_prompt(messages)
-    assert "<system_instructions>" in prompt
+    assert "<system_instructions>" not in prompt
+    assert "<user>" not in prompt
     assert "You are a helpful coding assistant." in prompt
-    assert "<user>\nShow me project files.\n</user>" in prompt
+    assert "User:\nShow me project files." in prompt
 
 
 def test_tool_call_extraction():
@@ -153,7 +154,8 @@ def test_prompt_compiler_generates_tool_protocol_instruction():
         }],
     )
     assert "CRITICAL SYSTEM DIRECTIVE - LOCAL WORKSPACE TOOL ACCESS" in prompt
-    assert '<tool_call>{"name": "TOOL_NAME", "arguments": {"PARAM": "VALUE"}}</tool_call>' in prompt
+    assert '```json\n{"name": "TOOL_NAME"' in prompt
+    assert "<tool_call>" not in prompt
 
 
 def test_prompt_compiler_compacts_oversized_prompts():
@@ -171,7 +173,7 @@ def test_prompt_compiler_compacts_oversized_prompts():
     ]
     compiled = GeminiPromptCompiler.compile(messages)
     assert len(compiled.text) <= 45000
-    assert "<system_instructions>" in compiled.text
+    assert "<system_instructions>" not in compiled.text
     assert "You are a senior developer." in compiled.text
     assert "Final question: summarize the codebase." in compiled.text
     assert "已自動存入本地暫存檔案" in compiled.text or "tool result truncated" in compiled.text
@@ -272,9 +274,12 @@ def test_prompt_compilation_with_anthropic_and_openai_tool_results():
         )
     ]
     prompt_anthropic = SessionManager.compile_prompt(messages_anthropic)
-    assert '<tool_result id="call_123">' in prompt_anthropic
+    assert "Tool result" in prompt_anthropic
+    assert "[end of tool result]" in prompt_anthropic
     assert '{"api_key": "secret", "port": 8765}' in prompt_anthropic
-    assert '<tool_call id="call_123">' in prompt_anthropic
+    assert "Assistant tool call" in prompt_anthropic
+    assert '<tool_result' not in prompt_anthropic
+    assert '<tool_call' not in prompt_anthropic
 
     # OpenAI role: "tool" message format
     messages_openai = [
@@ -296,8 +301,11 @@ def test_prompt_compilation_with_anthropic_and_openai_tool_results():
         )
     ]
     prompt_openai = SessionManager.compile_prompt(messages_openai)
-    assert '<tool_result name="list_dir" id="call_456">' in prompt_openai
+    assert "Tool result" in prompt_openai
+    assert "list_dir" in prompt_openai
+    assert "[end of tool result]" in prompt_openai
     assert "file1.txt\nfile2.py\nREADME.md" in prompt_openai
+    assert "<tool_result" not in prompt_openai
 
 
 def test_question_asking_tool_extraction():
@@ -409,8 +417,8 @@ def test_google_specific_grounding_and_corrupted_tool_call_repair():
 def test_massive_system_prompt_does_not_drop_recent_tool_results():
     # Simulate Kilo sending a 42KB system prompt + initial user query
     massive_system = "CRITICAL RULES AND SYSTEM INSTRUCTIONS\n" + ("x" * 42000) + "\nUser: 請分析 git status"
-    assistant_call = "<tool_call>{\"name\": \"execute_command\", \"arguments\": {\"command\": \"git status\"}}</tool_call>"
-    tool_result = "<tool_result name=\"execute_command\">\nOn branch master\nmodified: README.md\nmodified: server/app.py\n</tool_result>"
+    assistant_call = "Assistant tool call:\n```json\n{\"name\": \"execute_command\", \"arguments\": {\"command\": \"git status\"}}\n```"
+    tool_result = "Tool result [tool=\"execute_command\"]:\nOn branch master\nmodified: README.md\nmodified: server/app.py\n[end of tool result]"
 
     messages = [
         ChatMessage(role="user", content=massive_system),
@@ -425,7 +433,8 @@ def test_massive_system_prompt_does_not_drop_recent_tool_results():
     # 2. Crucially, the git status tool result MUST NOT be dropped!
     assert "On branch master" in text
     assert "modified: server/app.py" in text
-    assert "<tool_result" in text
+    assert "Tool result" in text
+    assert "<tool_result" not in text
 
 
 def test_large_tool_output_file_spillover():
